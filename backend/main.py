@@ -75,7 +75,11 @@ async def _startup():
     try:
         from backend.orchestrator.inference_adapter import list_models
         models = await list_models()
-        missing = [m for m in {settings.vultr_model_default, settings.vultr_model_cheap} if m not in models]
+        from backend.orchestrator import model_registry
+        reg = model_registry.validate(models)
+        log.info("model validation: default_available=%s downgrade=%s (%s)",
+                 reg["default_available"], reg["downgrade_enabled"], reg["downgrade_reason"])
+        missing = [m for m in {settings.vultr_model_default, settings.vultr_model_cheap} if m and m not in models]
         _inference_status.update(checked=True, ok=not missing, available_models=models,
                                  configured={"default": settings.vultr_model_default,
                                              "cheap": settings.vultr_model_cheap},
@@ -90,12 +94,67 @@ async def _startup():
 @app.get("/health")
 async def health(request: Request):
     infra = _infra_status()
-    ready = infra["kvm"] and infra["cgroup_v2"] and bool(infra["microsandbox_sdk"]) and _inference_status.get("ok", False)
-    body = {"status": "ok", "ready_for_governed_sessions": ready,
+    body = {"status": "ok", "alive": True, "ready_for_governed_sessions": _readiness()["ready"],
             "auth_configured": bool(settings.access_token) or settings.auth_disabled}
     if security.is_authenticated(request):   # details only for authenticated callers
         body.update(infra=infra, inference=_inference_status)
     return body
+
+
+def _readiness() -> dict:
+    """Can this server SAFELY create a governed session right now?"""
+    import os
+    import tempfile
+    from backend.orchestrator import model_registry
+    from backend.orchestrator.inference_pricing import has_price
+    from backend.services.session_manager import session_manager
+    infra = _infra_status()
+    ctrl = set(infra["cgroup_controllers"].split())
+    checks = {}
+    checks["kvm_accessible"] = os.access("/dev/kvm", os.R_OK | os.W_OK)
+    checks["cgroup_v2"] = infra["cgroup_v2"]
+    checks["cgroup_controllers_cpu_memory_pids"] = {"cpu", "memory", "pids"} <= ctrl
+    checks["running_as_root"] = bool(infra["running_as_root"])
+    checks["microsandbox_sdk"] = bool(infra["microsandbox_sdk"])
+    checks["docker_fallback_disabled"] = not settings.allow_docker_fallback
+    try:
+        sig = session_manager.signer.sign(b"ready-probe")
+        checks["signing_key_works"] = session_manager.signer.verify(
+            session_manager.signer.public_key_b64(), b"ready-probe", sig)
+    except Exception:
+        checks["signing_key_works"] = False
+    try:
+        with tempfile.NamedTemporaryFile(dir=settings.ledger_dir, delete=True):
+            pass
+        checks["ledger_dir_writable"] = True
+    except Exception:
+        checks["ledger_dir_writable"] = False
+    checks["inference_key_configured"] = bool(settings.vultr_inference_key)
+    checks["default_model_available"] = bool(model_registry.STATE.get("default_available"))
+    checks["access_token_configured"] = bool(settings.access_token) and len(settings.access_token) >= 24
+    checks["auth_enabled"] = not settings.auth_disabled or not settings.public_deployment
+    info = {
+        "default_model_priced": has_price(settings.vultr_model_default),
+        "dollar_caps_available": has_price(settings.vultr_model_default),
+        "model_downgrade": {"enabled": model_registry.STATE.get("downgrade_enabled", False),
+                            "reason": model_registry.STATE.get("downgrade_reason")},
+        "cgroup_freeze_available": Path("/sys/fs/cgroup/cgroup.freeze").exists() or "cgroup.freeze" in ctrl or None,
+    }
+    return {"ready": all(checks.values()), "checks": checks,
+            "failed": [k for k, v in checks.items() if not v], "info": info}
+
+
+@app.get("/ready")
+async def ready(request: Request):
+    r = _readiness()
+    if security.is_authenticated(request):
+        try:
+            from backend.services.session_manager import session_manager
+            r["usage"] = session_manager.usage.summary()
+        except Exception:
+            pass
+        return r
+    return {"ready": r["ready"]}
 
 
 # Serve the built dashboard from the same origin when present (single-port deploy).
