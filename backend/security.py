@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse
 from backend.config import settings
 
 COOKIE = "al_session"
-PUBLIC_PREFIXES = ("/health", "/auth/", "/assets/")
+PUBLIC_PREFIXES = ("/health", "/ready", "/auth/", "/assets/")
 PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico"}
 
 
@@ -57,6 +57,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
+def client_ip(request: Request) -> str:
+    """Real client address. X-Real-IP is honoured ONLY when the TCP peer is
+    the local nginx (which sets it from $remote_addr); a header sent by an
+    internet client is never trusted."""
+    peer = request.client.host if request.client else "unknown"
+    if peer in TRUSTED_PROXIES:
+        return request.headers.get("x-real-ip", peer)
+    return peer
+
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 _attempts: dict[str, deque] = defaultdict(deque)
 
@@ -67,7 +80,7 @@ class Login(BaseModel):
 
 @router.post("/login")
 async def login(body: Login, request: Request, response: Response):
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+    ip = client_ip(request)
     q, now = _attempts[ip], time.time()
     while q and now - q[0] > 60:
         q.popleft()

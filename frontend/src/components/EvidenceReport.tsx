@@ -2,12 +2,19 @@ import { useEffect, useState } from "react";
 import { exportUrl, getEvidence, tamperTest } from "../api/client";
 import type { EvidenceReport as Report, TamperResult } from "../types";
 
-const LABEL: Record<string, string> = {
-  process_isolation: "Process isolation",
-  secret_hygiene: "Secret hygiene",
-  resource_limits: "Resource limits",
-  lifecycle_discipline: "Lifecycle discipline",
+const AREA: Record<string, string> = {
+  ledger_integrity: "Ledger integrity (hash chain + Ed25519)",
+  input_integrity: "Input integrity (snapshot re-hashed)",
+  artifact_integrity: "Artifact integrity (output re-hashed)",
+  artifact_correctness: "Artifact correctness (independent recomputation)",
+  containment: "Containment (re-evaluated from signed probe)",
+  resource_limits: "Resource limits (kernel readback vs budget)",
+  termination: "Termination (all kill checks)",
+  execution_cleanup: "Execution cleanup",
+  inference_accounting: "Inference accounting",
 };
+
+const VCLS: Record<string, string> = { VALID: "ok", FAILED: "fail", PARTIAL: "warn", PENDING: "muted", NOT_APPLICABLE: "muted" };
 
 export default function EvidenceReport({ sessionId, autoLoad = false }: { sessionId: string; autoLoad?: boolean }) {
   const [report, setReport] = useState<Report | null>(null);
@@ -60,12 +67,12 @@ export default function EvidenceReport({ sessionId, autoLoad = false }: { sessio
                 <tr><th></th><th>Agent's output</th><th>Independent recomputation</th></tr>
               </thead>
               <tbody>
-                {a?.correctness ? (
-                  Object.keys(a.correctness.expected).map((k) => (
-                    <tr key={k} className={a.correctness!.expected[k] === a.correctness!.actual[k] ? "ok" : "fail"}>
+                {a?.correctness_detail ? (
+                  Object.keys(a.correctness_detail.expected).map((k) => (
+                    <tr key={k} className={a.correctness_detail!.expected[k] === a.correctness_detail!.actual[k] ? "ok" : "fail"}>
                       <td>{k}</td>
-                      <td>{String(a.correctness!.actual[k])}</td>
-                      <td>{String(a.correctness!.expected[k])}</td>
+                      <td>{String(a.correctness_detail!.actual[k])}</td>
+                      <td>{String(a.correctness_detail!.expected[k])}</td>
                     </tr>
                   ))
                 ) : (
@@ -76,18 +83,15 @@ export default function EvidenceReport({ sessionId, autoLoad = false }: { sessio
             <p>
               <strong>Artifact verdict (Level {a?.level}):</strong> <span className={verdictCls}>{a?.verdict}</span>
             </p>
-            {a?.integrity && (
+            {a?.integrity_detail && (
               <p className="muted small">
-                output sha256 recorded in ledger {a.integrity.recorded_in_ledger?.slice(0, 16)}… · file on disk{" "}
-                {a.integrity.actual?.slice(0, 16)}… · {a.integrity.match ? "match" : "MISMATCH"}
+                output sha256 recorded in ledger {a.integrity_detail.recorded_in_ledger?.slice(0, 16)}… · file on disk{" "}
+                {a.integrity_detail.actual?.slice(0, 16)}… · {a.integrity_detail.match ? "match" : "MISMATCH"}
               </p>
             )}
-            {a?.inputs && (
-              <p className="muted small">
-                inputs re-hashed against session-start snapshot: {a.inputs.verified ? "match" : "MISMATCH"} (
-                {Object.keys(a.inputs.files).join(", ")})
-              </p>
-            )}
+            <p className="muted small">
+              inputs re-hashed against the signed manifest: {report.inputs.verdict} ({Object.keys(report.inputs.files).join(", ")})
+            </p>
           </div>
 
           <div>
@@ -111,19 +115,26 @@ export default function EvidenceReport({ sessionId, autoLoad = false }: { sessio
           </div>
 
           <div>
-            <h4>Blast Radius Zero containment requirements</h4>
-            <ul className="checklist">
-              {Object.entries(report.containment).map(([k, v]) => (
-                <li key={k} className={v.ok ? "ok" : "fail"} title={typeof v.detail === "string" ? v.detail : JSON.stringify(v.detail)}>
-                  {v.ok ? "✓" : "✗"} {LABEL[k] ?? k}
-                  <div className="muted small">
-                    {typeof v.detail === "string"
-                      ? v.detail
-                      : Object.entries(v.detail || {}).map(([dk, dv]) => `${dk}=${dv}`).join(" · ")}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <h4>Verification by area (each re-derived from the signed ledger)</h4>
+            <table className="claims">
+              <tbody>
+                {Object.entries(report.verification).map(([k, v]) => (
+                  <tr key={k}>
+                    <td>{AREA[k] ?? k}</td>
+                    <td className={VCLS[v] ?? ""}><strong>{v}</strong></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {report.containment.failed_checks?.length > 0 && (
+              <p className="fail small">containment failed: {report.containment.failed_checks.join(", ")}</p>
+            )}
+            {report.inference_verification?.accounting === "PARTIAL" && (
+              <p className="warn small">
+                {report.inference_verification.uncertain_reserved_tokens} tokens reserved with no provider usage
+                received — counted as uncertain spend, not as measured.
+              </p>
+            )}
           </div>
 
           <div>
@@ -131,12 +142,10 @@ export default function EvidenceReport({ sessionId, autoLoad = false }: { sessio
             <p className="small">
               final state <span className={`state-pill state-${report.final_state.toLowerCase()}`}>{report.final_state}</span> · agent{" "}
               {report.agent_status} · {report.steps_completed} steps · {report.inference.total_tokens.toLocaleString()} tokens ·
-              est. ${report.inference.estimated_cost_usd.toFixed(5)} · {report.entry_count} signed entries
+              est. ${(report.inference.estimated_cost_usd ?? 0).toFixed(5)} · {report.entry_count} signed entries
             </p>
-            {report.termination && (
-              <p className="small">
-                termination: <span className={report.termination.verdict === "KILL_CONFIRMED" ? "ok" : "fail"}>{report.termination.verdict}</span>
-              </p>
+            {!report.session_started && (
+              <p className="fail small">session refused at start: {report.start_failure?.category}</p>
             )}
           </div>
         </div>

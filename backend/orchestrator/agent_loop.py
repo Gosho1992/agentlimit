@@ -41,6 +41,7 @@ class AgentOrchestrator:
         self.artifact_dir = Path(artifact_dir) if artifact_dir else None
         self.inference = inference or InferenceAdapter(
             token_limit=budget.token_limit, cost_limit_usd=getattr(budget, "cost_limit_usd", 0.0))
+        self.inference.on_call = lambda rec: self.ledger.append("inference_call", rec)
         self.context = ContextManager()
         self.generator = CodeGenerator(self.inference, self.context)
 
@@ -272,6 +273,7 @@ class AgentOrchestrator:
             "stdout_sha256": out_sha,
             "stdout_bytes": len(out_bytes),
             "artifact_path": artifact_path,
+            "artifact_relative_path": f"artifacts/{self.session_id}_final_stdout.txt" if artifact_path else None,
             "total_tokens": self.inference.total_tokens(),
             "estimated_cost_usd": round(self.inference.total_cost_usd, 6),
         })

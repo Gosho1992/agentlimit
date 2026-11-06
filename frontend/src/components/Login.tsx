@@ -24,8 +24,8 @@ export default function Login({ onDone, configured }: { onDone: () => void; conf
     >
       <h2>Access code</h2>
       <p className="muted">
-        This demo runs real microVMs and real Vultr Serverless Inference, so sessions are protected. Judges: the access
-        code is in the project submission.
+        This demo runs real microVMs and real Vultr Serverless Inference, so sessions are protected. Judges receive the
+        access code privately from the team. Recorded sessions and their signed evidence stay verifiable offline.
       </p>
       {!configured && <p className="error">Server has no access code configured — sessions are disabled (fail-closed).</p>}
       <label>

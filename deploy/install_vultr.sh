@@ -35,9 +35,10 @@ echo "== 4/8 config, access token, demo data"
 [ -f backend/.env ] || cp backend/.env.example backend/.env
 chmod 600 backend/.env
 if ! grep -q '^ACCESS_TOKEN=.\+' backend/.env; then
-  TOKEN="$(openssl rand -hex 16)"
+  TOKEN="$(openssl rand -hex 24)"   # 192-bit
   sed -i "s/^ACCESS_TOKEN=.*/ACCESS_TOKEN=${TOKEN}/" backend/.env
-  echo "Generated ACCESS_TOKEN=${TOKEN}  (give this to judges in the submission)"
+  echo "Generated ACCESS_TOKEN (stored only in backend/.env, mode 600)."
+  echo "Read it with:  sudo grep ^ACCESS_TOKEN backend/.env   — share it with judges PRIVATELY, never in the README."
 fi
 mkdir -p /var/lib/agentlimit/ledger /var/lib/agentlimit/keys
 chmod 700 /var/lib/agentlimit/keys
@@ -48,6 +49,7 @@ echo "== 5/8 dashboard build"
 
 echo "== 6/8 systemd + nginx"
 sed "s#__REPO__#${REPO}#g" deploy/agentlimit.service > /etc/systemd/system/agentlimit.service
+cp deploy/nginx-ratelimit.conf /etc/nginx/conf.d/agentlimit_ratelimit.conf
 sed "s#__SERVER_NAME__#${DOMAIN:-_}#g" deploy/nginx.conf > /etc/nginx/sites-available/agentlimit
 ln -sf /etc/nginx/sites-available/agentlimit /etc/nginx/sites-enabled/agentlimit
 rm -f /etc/nginx/sites-enabled/default
@@ -69,7 +71,18 @@ systemctl enable agentlimit
 systemctl restart agentlimit
 
 echo "== 8/8 infrastructure gate"
-venv/bin/python -m backend.scripts.day1_gate | tee /var/lib/agentlimit/day1_gate.txt || true
+set +e
+venv/bin/python -m backend.scripts.day1_gate | tee /var/lib/agentlimit/day1_gate.txt
+GATE=${PIPESTATUS[0]}
+set -e
+if [ "$GATE" -ne 0 ]; then
+  echo "################################################################"
+  echo "#  INFRASTRUCTURE GATE FAILED — the app is installed but NOT    #"
+  echo "#  release-ready. Fix the FAIL lines above before recording.    #"
+  echo "################################################################"
+else
+  echo "Infrastructure gate: ALL PASSED"
+fi
 echo
 echo "Next: set VULTR_INFERENCE_KEY (and VULTR_MODEL_* IDs) in backend/.env, then: systemctl restart agentlimit"
 echo "Readiness: curl -s -H \"Authorization: Bearer \$(grep ^ACCESS_TOKEN backend/.env | cut -d= -f2)\" http://127.0.0.1:8000/health"

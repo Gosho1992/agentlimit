@@ -47,18 +47,36 @@ try:
     socket.getaddrinfo("api.vultrinference.com", 443); res["dns_blocked"] = False
 except Exception:
     res["dns_blocked"] = True
-keys = [k for k in os.environ if any(t in k.upper() for t in ("KEY", "TOKEN", "SECRET", "PASSWORD", "VULTR"))]
-res["secret_env_vars"] = keys
+keys = [k for k in os.environ if any(t in k.upper() for t in ("KEY", "TOKEN", "SECRET", "PASSWORD", "VULTR", "CREDENTIAL"))]
+res["secret_env_vars"] = sorted(keys)
 res["no_secrets_in_env"] = not keys
-res["host_paths_visible"] = [p for p in ("/var/lib/agentlimit", "/sys/fs/cgroup/agentlimit", "/root/.ssh") if os.path.exists(p)]
-res["workspace_files"] = sorted(os.listdir("/workspace")) if os.path.isdir("/workspace") else []
+res["host_paths_visible"] = [p for p in ("/var/lib/agentlimit", "/sys/fs/cgroup/agentlimit", "/root/.ssh",
+                                         "/etc/agentlimit", "/opt/agentlimit") if os.path.exists(p)]
 res["uid"] = os.getuid()
+res["workspace_mounted"] = os.path.isdir("/workspace")
+files = sorted(f for f in os.listdir("/workspace") if os.path.isfile(os.path.join("/workspace", f))) \
+    if res["workspace_mounted"] else []
+res["workspace_files"] = files
+readable = True
+for f in files:
+    try:
+        with open(os.path.join("/workspace", f), "rb") as fh:
+            fh.read(1)
+    except Exception:
+        readable = False
+res["inputs_readable"] = readable and res["workspace_mounted"]
+writable = []
+for f in files:
+    try:
+        open(os.path.join("/workspace", f), "ab").close(); writable.append(f)
+    except Exception:
+        pass
 try:
-    target = os.path.join("/workspace", res["workspace_files"][0]) if res["workspace_files"] else "/workspace/.probe"
-    open(target, "a").close()
-    res["inputs_read_only"] = False
+    open("/workspace/.probe_new_file", "wb").close(); writable.append("<create in /workspace>")
 except Exception:
-    res["inputs_read_only"] = True
+    pass
+res["writable_inputs"] = writable
+res["inputs_read_only"] = res["workspace_mounted"] and not writable
 print(json.dumps(res))
 '''
 

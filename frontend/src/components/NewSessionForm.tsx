@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createSession, getHealth } from "../api/client";
+import { createSession } from "../api/client";
 
 interface PastSession { session_id: string; task: string; state: string; agent_status: string; created_at: string; archived: boolean }
 
@@ -62,14 +62,14 @@ export default function NewSessionForm({ onCreated }: { onCreated: (id: string) 
   const [memBudget, setMemBudget] = useState(SCENARIOS[0].mem);
   const [tokenBudget, setTokenBudget] = useState(SCENARIOS[0].tokens);
   const [wall, setWall] = useState(SCENARIOS[0].wall);
-  const [costCap, setCostCap] = useState(0.05);
+  const [costCap, setCostCap] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<any>(null);
 
   const [past, setPast] = useState<PastSession[]>([]);
   useEffect(() => {
-    getHealth().then(setHealth).catch(() => setHealth(null));
+    fetch("/ready").then((r) => r.json()).then(setHealth).catch(() => setHealth(null));
     fetch("/sessions").then((r) => (r.ok ? r.json() : [])).then(setPast).catch(() => setPast([]));
   }, []);
 
@@ -103,20 +103,24 @@ export default function NewSessionForm({ onCreated }: { onCreated: (id: string) 
     }
   }
 
-  const infra = health?.infra;
-  const chip = (ok: boolean | undefined, label: string) => (
-    <span className={`chip ${ok ? "chip-ok" : "chip-bad"}`}>{ok ? "✓" : "✗"} {label}</span>
-  );
 
   return (
     <form className="card new-session" onSubmit={handleSubmit}>
       <h2>Start a governed agent session</h2>
       {health && (
         <div className="readiness">
-          {chip(infra?.kvm, "KVM")}
-          {chip(infra?.cgroup_v2, "cgroup v2")}
-          {chip(!!infra?.microsandbox_sdk, "Microsandbox")}
-          {chip(health?.inference?.ok, `Vultr Inference${health?.inference?.configured ? " · " + health.inference.configured.default : ""}`)}
+          <span className={`chip ${health.ready ? "chip-ok" : "chip-bad"}`}>
+            {health.ready ? "✓ Ready for governed sessions" : "✗ Not ready"}
+          </span>
+          {Object.entries(health.checks || {}).filter(([, v]) => !v).map(([k]) => (
+            <span key={k} className="chip chip-bad">✗ {k.replace(/_/g, " ")}</span>
+          ))}
+          {health.info?.model_downgrade && (
+            <span className={`chip ${health.info.model_downgrade.enabled ? "chip-ok" : ""}`}>
+              model downgrade: {health.info.model_downgrade.enabled ? "verified" : "off"}
+            </span>
+          )}
+          {health.info && !health.info.dollar_caps_available && <span className="chip">$ caps off (no verified price)</span>}
         </div>
       )}
 
@@ -152,7 +156,7 @@ export default function NewSessionForm({ onCreated }: { onCreated: (id: string) 
           Token budget
           <input type="number" min={1000} value={tokenBudget} onChange={(e) => setTokenBudget(Number(e.target.value))} />
         </label>
-        <label title="Estimated from the configured price table; 0 = no dollar cap">
+        <label title="Requires a verified price for the model in backend/pricing.json; 0 = no dollar cap">
           Est. cost cap ($)
           <input type="number" min={0} step={0.01} value={costCap} onChange={(e) => setCostCap(Number(e.target.value))} />
         </label>

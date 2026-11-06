@@ -39,7 +39,20 @@ class FakeCgroup:
     def set_memory_max(self, b): self.memory_max_bytes = b
     def set_pids_max(self, n): self.pids = n
     def attach_tree(self, pid): self.pid = pid; return 3
+    def attach_tree_verified(self, pid, starttime=None):
+        self.pid = pid
+        ok = getattr(self, "attach_ok", True)
+        return {"root_pid": pid, "root_starttime": starttime, "members": [pid] if ok else [],
+                "exited_during_scan": [], "failures": [] if ok else [{"pid": pid + 1, "reason": "attach_failed:PermissionError"}],
+                "passes": 2, "stable_passes": 2, "passed": ok}
     def contains(self, pid): return pid == getattr(self, "pid", None)
+    def readback(self):
+        return {"cpu.max": self.cpu_max_val, "memory.max": str(self.memory_max_bytes),
+                "memory.high": "max" if self.memory_high is None else str(self.memory_high),
+                "pids.max": str(getattr(self, "pids", "max"))}
+    def capabilities(self):
+        return {f: True for f in ("cgroup.procs", "cgroup.events", "cgroup.kill", "cpu.max", "cpu.stat",
+                                  "memory.max", "memory.high", "memory.current", "pids.max", "cgroup.freeze")}
 
 
 class FakeRuntime:
@@ -67,9 +80,15 @@ class FakeRuntime:
         self.stopped = True
         return {"stop_ok": True, "removed": True, "stop_error": None, "remove_error": None}
     async def host_pid(self): return 999_999_999   # never a live PID
+    probe_override: dict = {}
+    workspace_files = ["orders.csv", "payments.csv"]
     async def containment_probe(self):
-        return {"egress_blocked": True, "dns_blocked": True, "secret_env_vars": [],
-                "no_secrets_in_env": True, "host_paths_visible": [], "workspace_files": []}
+        p = {"egress_blocked": True, "dns_blocked": True, "secret_env_vars": [], "no_secrets_in_env": True,
+             "host_paths_visible": [], "uid": 65534, "workspace_mounted": True,
+             "workspace_files": list(self.workspace_files), "inputs_readable": True,
+             "writable_inputs": [], "inputs_read_only": True}
+        p.update(self.probe_override)
+        return p
 
 
 def mock_inference_transport(prompt_tokens=400, completion_tokens=200, code="print('hi')", calls=None, delay=0.0):

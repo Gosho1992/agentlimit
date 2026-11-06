@@ -36,6 +36,12 @@ export interface InferenceSnapshot {
   throttled: boolean;
   revoked?: boolean;
   model_downgrade_available?: boolean;
+  downgrade_reason?: string;
+  effective_model?: string;
+  in_flight_reserved_cost_usd?: number;
+  uncertain_reserved_cost_usd?: number;
+  committed_cost_usd?: number;
+  cost_known?: boolean;
   cheap_model?: string | null;
   in_flight?: number;
   uncertain_requests?: number;
@@ -50,6 +56,13 @@ export interface Termination {
   sandbox_pid?: number;
   final_cpu_usec?: number;
   final_tokens?: number;
+}
+
+export interface ContainmentEval {
+  raw?: Record<string, any>;
+  checks: Record<string, boolean>;
+  passed: boolean;
+  failed_checks: string[];
 }
 
 export interface Containment {
@@ -98,7 +111,8 @@ export interface SessionSnapshot {
   sandbox_pid?: number;
   memory_telemetry_valid: boolean;
   inference: InferenceSnapshot;
-  containment: Containment;
+  containment: ContainmentEval;
+  memory_plan?: Record<string, any>;
   termination: Termination | null;
   lifecycle: Record<string, any> | null;
   recommendations: Recommendation[];
@@ -111,8 +125,10 @@ export interface ArtifactVerification {
   level: number;
   verdict: "VERIFIED" | "INTEGRITY_ONLY" | "FAILED" | "NO_ARTIFACT";
   inputs?: { verified: boolean; files: Record<string, { recorded: string; actual: string; match: boolean }> };
-  integrity?: { recorded_in_ledger: string; actual: string; match: boolean };
-  correctness?: { expected: Record<string, any>; actual: Record<string, any> };
+  integrity?: string;
+  correctness?: string;
+  integrity_detail?: { recorded_in_ledger: string; actual: string; match: boolean };
+  correctness_detail?: { expected: Record<string, any>; actual: Record<string, any> };
   agent_report?: Record<string, any> | null;
   detail?: string;
 }
@@ -120,11 +136,18 @@ export interface ArtifactVerification {
 export interface EvidenceReport {
   session_id: string;
   task: string;
+  verification: Record<string, string>;
+  session_started: boolean;
+  start_failure?: Record<string, any> | null;
+  inputs: { verdict: string; files: Record<string, any> };
+  resource_limits: { verdict: string; checks?: Record<string, boolean>; semantics?: Record<string, string> };
+  cleanup: { verdict: string; checks?: Record<string, boolean> };
+  inference_verification: Record<string, any>;
   chain_valid: boolean;
   chain_detail: string;
   artifact_verification: ArtifactVerification;
-  containment: Record<string, { ok: boolean; detail: any }>;
-  termination: Termination | null;
+  containment: { verdict: string; passed: boolean; checks: Record<string, boolean>; failed_checks: string[] };
+  termination: { verdict: string; checks?: Record<string, boolean>; recorded_verdict?: string; reason?: string };
   lifecycle: Record<string, any> | null;
   public_key_b64: string;
   public_key_fingerprint?: string;
