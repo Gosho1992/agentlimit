@@ -19,7 +19,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.sandbox.cgroup_controller import CgroupController  # noqa: E402
+from backend.governance.containment import evaluate_containment  # noqa: E402
+from backend.governance.resource_policy import VMM_PIDS_MAX, memory_plan  # noqa: E402
+from backend.sandbox.cgroup_controller import CgroupController, proc_starttime  # noqa: E402
 from backend.sandbox.host_process import find_candidates, find_sandbox_pid  # noqa: E402
 from backend.sandbox.microsandbox_runtime import MicrosandboxRuntime  # noqa: E402
 
@@ -41,7 +43,10 @@ async def main():
     import tempfile
     ws = Path(tempfile.mkdtemp())
     (ws / "orders.csv").write_text("order_id,amount\nA,1.00\n")
-    rt = MicrosandboxRuntime("gate" + str(int(time.time())), memory_mb=320)
+    plan = memory_plan(512 * 1024 * 1024)       # SAME policy as production sessions
+    print(f"memory policy: host memory.max={plan['host_memory_max_bytes']} guest RAM={plan['guest_ram_mb']} MB "
+          f"(headroom {plan['vmm_headroom_mb']} MB)", flush=True)
+    rt = MicrosandboxRuntime("gate" + str(int(time.time())), memory_mb=plan["guest_ram_mb"])
     try:
         await rt.start(ws)
         record("sandbox_boot", True, rt.name)
@@ -64,28 +69,45 @@ async def main():
         if not pid:
             return
 
-        cg = CgroupController(rt.name, root="/sys/fs/cgroup/agentlimit_gate")
-        cg.set_memory_max(512 * 2**20 + 256 * 2**20)
-        cg.set_pids_max(512)
-        n = cg.attach_tree(pid)
-        record("cgroup_attach", n > 0 and cg.contains(pid), f"attached={n} path={cg.path}")
+        try:
+            cg = CgroupController(rt.name, root="/sys/fs/cgroup/agentlimit_gate")
+            record("cgroup_controllers", True, str(cg.capabilities()))
+        except Exception as e:
+            record("cgroup_controllers", False, repr(e)[:300])
+            return
+        cg.set_memory_max(plan["host_memory_max_bytes"])
+        cg.set_pids_max(VMM_PIDS_MAX)
+        att = cg.attach_tree_verified(pid, proc_starttime(pid))
+        record("cgroup_attach_verified", att["passed"],
+               f"members={att['members']} passes={att['passes']} stable={att['stable_passes']} "
+               f"failures={att['failures']}")
 
         c0 = cg.cpu_usage_usec()
         await rt.exec("x=0\nfor i in range(30_000_000): x+=i\nprint(x)", timeout=60)
         c1 = cg.cpu_usage_usec()
         record("cpu_accounting_moves", c1 - c0 > 500_000, f"delta_usec={c1 - c0}")
 
-        m0 = cg.memory_current()
-        await rt.exec("b=bytearray(300*1024*1024)\nimport time; time.sleep(1.5)\nprint(len(b))", timeout=30)
-        m1 = cg.memory_peak()
-        record("memory_telemetry_moves", (m1 - m0) > 100 * 2**20, f"baseline={m0} peak={m1}")
+        # Memory: sample memory.current WHILE the guest holds the allocation.
+        alloc_mb = 120
+        baseline = cg.memory_current()
+        observed = baseline
+        task = asyncio.create_task(rt.exec(
+            f"import time\nb = bytearray({alloc_mb} * 1024 * 1024)\nfor i in range(0, len(b), 4096): b[i] = 1\n"
+            "time.sleep(5)\nprint(len(b))", timeout=30))
+        while not task.done():
+            observed = max(observed, cg.memory_current())
+            await asyncio.sleep(0.05)
+        await task
+        delta = observed - baseline
+        record("memory_telemetry_moves", delta > 64 * 2**20,
+               f"guest_alloc={alloc_mb}MB baseline={baseline} observed_peak={observed} delta={delta} "
+               f"host_limit={plan['host_memory_max_bytes']} guest_ram={plan['guest_ram_mb']}MB")
 
         probe = await rt.containment_probe()
-        record("network_egress_blocked", bool(probe.get("egress_blocked")), str(probe.get("egress_error", "")))
-        record("no_secrets_in_guest", bool(probe.get("no_secrets_in_env")), f"vars={probe.get('secret_env_vars')}")
-        record("agent_runs_unprivileged", probe.get("uid") not in (None, 0), f"uid={probe.get('uid')}")
-        record("inputs_read_only_to_agent", bool(probe.get("inputs_read_only")), f"files={probe.get('workspace_files')}")
-        record("host_paths_invisible", not probe.get("host_paths_visible"), str(probe.get("host_paths_visible")))
+        ev = evaluate_containment(probe, expected_files=["orders.csv"])   # SAME policy as production
+        for name, ok in ev["checks"].items():
+            record(f"containment:{name}", ok, "")
+        print(f"      raw probe: {probe}", flush=True)
 
         frozen = cg.freeze()
         unfrozen = cg.unfreeze() if frozen else False
@@ -137,3 +159,4 @@ def print_report():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    sys.exit(0 if RESULTS and all(ok for ok, _ in RESULTS.values()) else 1)
