@@ -16,23 +16,26 @@ class Settings(BaseSettings):
     microsandbox_cpus: int = 1
     allow_docker_fallback: bool = False
     sandbox_exec_user: str = "nobody"   # agent code runs unprivileged in the guest; "" = root
-    require_containment_probe: bool = True
 
     workspace_dir: str = "workspace"
     cgroup_root: str = "/sys/fs/cgroup/agentlimit"
     ledger_dir: str = "/var/lib/agentlimit/ledger"
     signer_key_path: str = "/var/lib/agentlimit/keys/signer.ed25519"
+    usage_db_path: str = "/var/lib/agentlimit/usage.db"
 
     db_url: str = "sqlite+aiosqlite:///./agentlimit.db"
     poll_interval_ms: int = 500
     pause_timeout_s: float = 120.0
     vmm_memory_headroom_mb: int = 192   # host memory budget = guest RAM + this
     inflight_drain_s: float = 15.0
+    token_estimate_chars_per_token: float = 3.0   # conservative (real ~3.5-4)
+    token_estimate_margin: float = 1.2            # extra safety margin on prompt estimate
 
     # --- public-deployment protection ---
     access_token: str = ""              # REQUIRED unless auth_disabled
     auth_disabled: bool = False         # only for local development
     allowed_origins: str = ""           # comma-separated; empty = same-origin only
+    public_deployment: bool = True      # refuse AUTH_DISABLED / missing token in /ready
     cookie_secure: bool = False         # set true once HTTPS is configured
     max_concurrent_sessions: int = 2
     max_sessions_per_hour: int = 20

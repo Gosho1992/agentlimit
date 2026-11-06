@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 
 from backend.evidence.archive import list_archived, read_entries, summarize
 from backend.governance.budget import SessionBudget
-from backend.services.session_manager import LimitExceeded, SandboxAttachError, session_manager
+from backend.config import settings
+from backend.orchestrator.inference_pricing import has_price
+from backend.services.session_manager import LimitExceeded, SessionStartError, session_manager
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -52,16 +54,18 @@ async def create_session(req: CreateSessionRequest):
         budget = build_budget(req)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    if budget.cost_limit_usd > 0 and not has_price(settings.vultr_model_default):
+        raise HTTPException(422, f"a dollar cap needs verified pricing for {settings.vultr_model_default!r} "
+                                 "(backend/pricing.json); set the cap to 0 or add the price")
     try:
         rt = await session_manager.create(req.task, budget)
     except LimitExceeded as e:
         raise HTTPException(429, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
-    except SandboxAttachError as e:
-        raise HTTPException(503, f"containment initialization failed (fail-closed): {e}")
-    except RuntimeError as e:
-        raise HTTPException(503, f"sandbox runtime unavailable: {e}")
+    except SessionStartError as e:
+        raise HTTPException(503, {"category": e.category, "session_id": e.session_id, "detail": e.detail,
+                                  "evidence": f"/sessions/{e.session_id}/evidence"})
     await session_manager.start_run(rt.session_id)
     return CreateSessionResponse(session_id=rt.session_id, status="running",
                                  runtime_type=rt.runtime_type, containment=rt.containment)
@@ -132,6 +136,7 @@ async def get_session(session_id: str):
         "memory_telemetry_valid": eng._memory_telemetry_valid,
         "inference": orch.inference.snapshot(),
         "containment": rt.containment,
+        "memory_plan": rt.memory,
         "termination": eng.termination,
         "lifecycle": rt.lifecycle,
         "recommendations": eng.recommendations,

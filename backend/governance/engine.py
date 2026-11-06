@@ -44,7 +44,9 @@ class GovernanceEngine:
         pause_timeout_s: float = 120.0,
         runtime=None,
         sandbox_pid: int | None = None,
-        memory_validation_delta_bytes: int = 50 * 1024 * 1024,
+        sandbox_starttime: int | None = None,
+        memory_plan: dict | None = None,
+        memory_validation_delta_bytes: int = 64 * 1024 * 1024,
     ):
         self.session_id = session_id
         self.cg = cg
@@ -59,7 +61,11 @@ class GovernanceEngine:
         self.state: State = State.NORMAL
         self.recommender = RecommendationEngine()
         self.interventions = InterventionController(
-            session_id, cg, ledger, orchestrator, budget, runtime=runtime, sandbox_pid=sandbox_pid)
+            session_id, cg, ledger, orchestrator, budget, runtime=runtime, sandbox_pid=sandbox_pid,
+            sandbox_starttime=sandbox_starttime, memory_plan=memory_plan)
+        # Serialises every state-changing decision (ticks, operator pause/resume/kill).
+        # KILL is irreversible and wins; never held across a model call.
+        self.transition_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.ticks = 0
         self.tick_errors = 0
@@ -98,7 +104,10 @@ class GovernanceEngine:
                                                   "poll_interval_s": self.poll_interval_s})
         while not self.stop_event.is_set():
             try:
-                await self._tick()
+                async with self.transition_lock:
+                    if self.state == State.KILL:
+                        break
+                    await self._tick()
             except Exception as e:
                 self.tick_errors += 1
                 log.exception("[%s] tick failed: %s", self.session_id, e)
@@ -107,7 +116,9 @@ class GovernanceEngine:
                 if self.tick_errors >= 5:
                     # Fail closed: a governor that cannot govern must stop the agent.
                     self._kill_reason = "governor_fault_fail_closed"
-                    await self._transition_to(State.KILL, *self._read())
+                    async with self.transition_lock:
+                        if self.state != State.KILL:
+                            await self._transition_to(State.KILL, *self._read())
                     self.stop_event.set()
                     break
             await asyncio.sleep(self.poll_interval_s)
@@ -126,8 +137,9 @@ class GovernanceEngine:
         """Synchronous (awaitable) kill used by the API so the HTTP response can
         carry the verified verdict."""
         self.force_kill(reason)
-        if self.state != State.KILL:
-            await self._transition_to(State.KILL, *self._read())
+        async with self.transition_lock:          # KILL overrides any in-progress decision
+            if self.state != State.KILL:
+                await self._transition_to(State.KILL, *self._read())
         self.stop_event.set()
         return self.termination or {}
 
@@ -135,8 +147,14 @@ class GovernanceEngine:
         """Operator resume: unfreeze, optionally extend the CPU budget, then
         de-escalate to the state the CURRENT metrics justify (capped below PAUSE).
         If the budget is still exhausted the next tick will pause again."""
-        if self.state == State.KILL:
-            return {"resumed": False, "state": self.state.value, "reason": "session terminated"}
+        async with self.transition_lock:
+            return await self._resume_locked(extra_cpu_usec)
+
+    async def _resume_locked(self, extra_cpu_usec: int) -> dict:
+        if self.state == State.KILL or self._manual_kill:
+            return {"resumed": False, "state": self.state.value, "reason": "session terminated (KILL is irreversible)"}
+        if self.state != State.PAUSE:
+            return {"resumed": False, "state": self.state.value, "reason": "session is not paused"}
         prev = self.state
         self._manual_pause = False
         self._paused_at = None
@@ -160,7 +178,10 @@ class GovernanceEngine:
         sandbox exec. The governor decides, not the agent."""
         if self.state == State.KILL or self._manual_kill:
             return False, "terminated"
-        await self._evaluate_recommendations(source="pre_step")
+        async with self.transition_lock:
+            if self.state == State.KILL:
+                return False, "terminated"
+            await self._evaluate_recommendations(source="pre_step")
         if self.orchestrator is not None and getattr(self.orchestrator, "_stop_retries", False):
             return False, "stopped_by_governor:retry_loop"
         return True, ""
@@ -170,8 +191,9 @@ class GovernanceEngine:
     def _read(self):
         cpu = self.cg.cpu_usage_usec()
         mem_peak = self.cg.memory_peak()
-        tokens = self.orchestrator.inference.total_tokens() if self.orchestrator else 0
-        cost = self.orchestrator.inference.total_cost_usd if self.orchestrator else 0.0
+        inf = self.orchestrator.inference if self.orchestrator else None
+        tokens = inf.committed_tokens() if inf else 0
+        cost = inf.committed_cost_usd if inf else 0.0
         return cpu, tokens, mem_peak, self.wall_seconds, cost
 
     async def _tick(self):
@@ -179,8 +201,10 @@ class GovernanceEngine:
         cpu_usec = self.cg.cpu_usage_usec()
         mem_current = self.cg.memory_current()
         mem_peak = self.cg.memory_peak()
-        tokens = await _maybe_await(self.token_spend_fn())
-        cost = self.orchestrator.inference.total_cost_usd if self.orchestrator else 0.0
+        inf = self.orchestrator.inference if self.orchestrator else None
+        # committed = settled + in-flight + uncertain reservations (not just settled usage)
+        tokens = inf.committed_tokens() if inf else await _maybe_await(self.token_spend_fn())
+        cost = inf.committed_cost_usd if inf else 0.0
         wall = self.wall_seconds
         now = time.monotonic()
         self._cpu_hist.append((now, cpu_usec))
@@ -239,7 +263,9 @@ class GovernanceEngine:
             "memory_current_bytes": mem_current,
             "memory_peak_bytes": mem_peak,
             "token_spend": tokens,
+            "tokens_settled": inf.total_tokens() if inf else tokens,
             "estimated_cost_usd": round(cost, 6),
+            "cost_settled_usd": round(inf.total_cost_usd, 6) if inf else 0.0,
             "wall_seconds": round(wall, 3),
             "memory_telemetry_valid": self._memory_telemetry_valid,
             "utilisation_pct": self._util_rounded(),

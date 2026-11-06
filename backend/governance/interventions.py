@@ -23,16 +23,16 @@ calling the model.
 
 import asyncio
 import logging
-import os
 from enum import Enum
 
+from backend.config import settings
+from backend.orchestrator import model_registry
+
 from backend.evidence.ledger import EvidenceLedger
-from backend.sandbox.cgroup_controller import CgroupController
+from backend.governance.resource_policy import MEMORY_HIGH_FRACTION, THROTTLE_CPU_QUOTA_USEC
+from backend.sandbox.cgroup_controller import CgroupController, proc_starttime
 
 log = logging.getLogger("agentlimit.interventions")
-
-
-MEMORY_HIGH_FRACTION = 0.90
 
 
 class PauseMode(str, Enum):
@@ -45,28 +45,21 @@ class KillVerdict(str, Enum):
     KILL_FAILED = "KILL_FAILED"
 
 
-def _pid_alive(pid: int | None) -> bool:
+def _pid_alive(pid: int | None, starttime: int | None = None) -> bool:
+    """True only if THIS process (same start time) still runs. A reused PID
+    with a different start time is a different process: the original is gone."""
     if not pid:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    st = proc_starttime(pid)
+    if st is None:
         return False
-    except PermissionError:
-        return True
-    # A zombie still answers kill(0); treat zombies as gone.
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            stat = f.read()
-        state = stat[stat.rfind(")") + 2:].split()[0]
-        return state != "Z"
-    except FileNotFoundError:
-        return False
+    return starttime is None or st == starttime
 
 
 class InterventionController:
     def __init__(self, session_id, cg: CgroupController, ledger: EvidenceLedger,
-                 orchestrator, budget, runtime=None, sandbox_pid: int | None = None):
+                 orchestrator, budget, runtime=None, sandbox_pid: int | None = None,
+                 sandbox_starttime: int | None = None, memory_plan: dict | None = None):
         self.session_id = session_id
         self.cg = cg
         self.ledger = ledger
@@ -74,6 +67,8 @@ class InterventionController:
         self.budget = budget
         self.runtime = runtime
         self.sandbox_pid = sandbox_pid
+        self.sandbox_starttime = sandbox_starttime
+        self.memory_plan = memory_plan
         self.throttled = False
         self.paused_mode: PauseMode | None = None
         self.killed = False
@@ -81,11 +76,11 @@ class InterventionController:
 
     # ---------- THROTTLE ----------
 
-    async def throttle(self, cpu_quota_usec: int = 50_000) -> None:
+    async def throttle(self, cpu_quota_usec: int = THROTTLE_CPU_QUOTA_USEC) -> None:
         try:
             self.cg.set_cpu_quota(cpu_quota_usec)
             action = f"cpu.max={cpu_quota_usec}/100000"
-            ok = True
+            ok = self.cg.cpu_max().startswith(str(cpu_quota_usec))   # kernel readback
         except Exception as e:
             action = f"cpu_throttle_failed:{e}"
             ok = False
@@ -95,9 +90,10 @@ class InterventionController:
         self.ledger.append("throttle_applied", {
             "action": action,
             "applied": ok,
-            "model_downgrade": ({"from": inf.last_model, "to": inf.cheap_model} if downgrade
-                                else "not configured (no distinct cheaper model) — CPU throttling only"),
-            "note": "cpu.max caps instantaneous CPU bandwidth; it does not reduce total CPU work.",
+            "model_downgrade": ({"from": settings.vultr_model_default, "to": inf.cheap_model} if downgrade
+                                else f"unavailable ({model_registry.STATE.get('downgrade_reason')}) — CPU throttling only"),
+            "cpu_max_readback": self.cg.cpu_max(),
+            "note": "cpu.max restricts CPU bandwidth; cumulative CPU use is tracked separately against the budget.",
         })
         if self.orchestrator is not None:
             try:
@@ -124,7 +120,8 @@ class InterventionController:
             elif action == "set_memory_high":
                 # Same boundary as the policy: host-accounted VMM memory.
                 # memory.high (reclaim pressure) sits BELOW memory.max (= budget).
-                soft = int(MEMORY_HIGH_FRACTION * self.budget.memory_limit_bytes)
+                soft = (self.memory_plan or {}).get("memory_high_bytes") or \
+                    int(MEMORY_HIGH_FRACTION * self.budget.memory_limit_bytes)
                 self.cg.set_memory_high(soft)
                 detail["memory.high_bytes"] = soft
                 detail["memory_budget_bytes"] = self.budget.memory_limit_bytes
@@ -234,7 +231,7 @@ class InterventionController:
             "inference_revoked": bool(getattr(inference, "revoked", True)),
             "agent_task_finished": agent_task_done,
             "cgroup_populated_0": not self.cg.is_populated(),
-            "sandbox_pid_gone": not _pid_alive(self.sandbox_pid),
+            "sandbox_pid_gone": not _pid_alive(self.sandbox_pid, self.sandbox_starttime),
             "sandbox_removed_via_runtime": bool(runtime_result.get("removed")) if self.runtime is not None else True,
         }
         verdict = KillVerdict.KILL_CONFIRMED if all(checks.values()) else KillVerdict.KILL_FAILED
