@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     vultr_inference_key: str = ""
     vultr_inference_base: str = "https://api.vultrinference.com/v1"
     vultr_model_default: str = "glm-5.2"
-    vultr_model_cheap: str = "glm-5.2"
+    vultr_model_cheap: str = "glm-5.3-flash"
 
     microsandbox_image: str = "python:3.11-slim"
     microsandbox_memory_mb: int = 512
