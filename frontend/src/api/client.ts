@@ -69,6 +69,12 @@ export async function killSession(
   return r.json();
 }
 
+export async function getEvents(sessionId: string): Promise<any[]> {
+  const r = await fetch(`${API_BASE}/sessions/${sessionId}/events`);
+  if (!r.ok) throw new Error(`getEvents failed: ${r.status}`);
+  return r.json();
+}
+
 export async function tamperTest(sessionId: string): Promise<TamperResult> {
   const r = await fetch(`${API_BASE}/sessions/${sessionId}/evidence/tamper-test`, { method: "POST" });
   if (!r.ok) throw new Error(`tamperTest failed: ${r.status}`);
