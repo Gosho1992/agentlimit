@@ -23,20 +23,34 @@ class CgroupController:
 
     # ---------- setup ----------
 
+    REQUIRED_FILES = ("cgroup.procs", "cgroup.events", "cgroup.kill", "cpu.max", "cpu.stat",
+                      "memory.max", "memory.high", "memory.current", "pids.max")
+
     def _ensure(self) -> None:
-        # Controllers must be enabled on every ancestor's subtree_control,
-        # top-down, before the leaf exposes cpu.max / memory.max / pids.max.
+        """Create the session cgroup and FAIL if a required controller or
+        control file is unavailable (no silent degradation)."""
         parent = self.path.parent
         parent.mkdir(parents=True, exist_ok=True)
         chain = [p for p in reversed(parent.parents) if (p / "cgroup.subtree_control").exists()]
         chain.append(parent)
+        errors = []
         for ancestor in chain:
             for ctrl in ("cpu", "memory", "pids"):
                 try:
-                    (ancestor / "cgroup.subtree_control").write_text(f"+{ctrl}\n")
-                except (PermissionError, FileNotFoundError, OSError):
-                    pass
+                    enabled = (ancestor / "cgroup.subtree_control").read_text().split()
+                    if ctrl not in enabled:
+                        (ancestor / "cgroup.subtree_control").write_text(f"+{ctrl}\n")
+                except (PermissionError, FileNotFoundError, OSError) as e:
+                    errors.append(f"{ancestor}:{ctrl}:{e}")
         self.path.mkdir(exist_ok=True)
+        missing = [f for f in self.REQUIRED_FILES if not (self.path / f).exists()]
+        if missing:
+            raise CgroupSetupError(f"cgroup {self.path} lacks required control files {missing}; "
+                                   f"controller errors: {errors[:3]}")
+        self.freeze_supported = (self.path / "cgroup.freeze").exists()
+
+    def capabilities(self) -> dict:
+        return {f: (self.path / f).exists() for f in self.REQUIRED_FILES + ("cgroup.freeze", "memory.peak")}
 
     # ---------- attach ----------
 
@@ -44,15 +58,90 @@ class CgroupController:
         (self.path / "cgroup.procs").write_text(str(pid))
 
     def attach_tree(self, root_pid: int) -> int:
-        """Attach root_pid and every descendant. Returns count attached."""
-        attached = 0
-        for pid in collect_tree(root_pid):
-            try:
-                self.attach(pid)
-                attached += 1
-            except (ProcessLookupError, PermissionError):
-                continue
-        return attached
+        """Back-compat helper: returns the number of verified members."""
+        return len(self.attach_tree_verified(root_pid)["members"])
+
+    def attach_tree_verified(self, root_pid: int, root_starttime: int | None = None,
+                             max_passes: int = 10, stable_passes_required: int = 2,
+                             pass_delay_s: float = 0.05) -> dict:
+        """
+        1. attach the VMM root first (new descendants inherit its cgroup),
+        2. repeatedly scan descendants and migrate any outside the cgroup,
+        3. distinguish processes that EXITED during the scan (ignored) from
+           live processes that could not be migrated (failure),
+        4. pass only after `stable_passes_required` consecutive scans in which
+           every live descendant was already a member,
+        5. guard against PID reuse with /proc/<pid>/stat starttime.
+        """
+        report = {"root_pid": root_pid, "root_starttime": root_starttime, "members": [],
+                  "exited_during_scan": [], "failures": [], "passes": 0, "stable_passes": 0,
+                  "passed": False}
+        start = proc_starttime(root_pid)
+        if start is None:
+            report["failures"].append({"pid": root_pid, "reason": "root_not_running"})
+            return report
+        if root_starttime is not None and start != root_starttime:
+            report["failures"].append({"pid": root_pid, "reason": "pid_reused"})
+            return report
+        report["root_starttime"] = start
+        try:
+            self.attach(root_pid)
+        except Exception as e:
+            report["failures"].append({"pid": root_pid, "reason": f"attach_failed:{type(e).__name__}"})
+            return report
+
+        members: dict[int, int] = {}
+        stable = 0
+        for _ in range(max_passes):
+            report["passes"] += 1
+            moved_any = False
+            failures_this_pass = []
+            for pid in collect_tree(root_pid):
+                st = proc_starttime(pid)
+                if st is None:
+                    report["exited_during_scan"].append(pid)
+                    continue
+                if self.contains(pid):
+                    members[pid] = st
+                    continue
+                moved_any = True
+                try:
+                    self.attach(pid)
+                except ProcessLookupError:
+                    report["exited_during_scan"].append(pid)
+                    continue
+                except Exception as e:
+                    if proc_starttime(pid) is None:
+                        report["exited_during_scan"].append(pid)
+                    else:
+                        failures_this_pass.append({"pid": pid, "reason": f"attach_failed:{type(e).__name__}"})
+                    continue
+                if self.contains(pid):
+                    members[pid] = st
+                elif proc_starttime(pid) is not None:
+                    failures_this_pass.append({"pid": pid, "reason": "membership_not_confirmed"})
+            if failures_this_pass:
+                report["failures"] = failures_this_pass
+                stable = 0
+            elif not moved_any:
+                stable += 1
+                if stable >= stable_passes_required:
+                    break
+            else:
+                stable = 0
+            time.sleep(pass_delay_s)
+        # final verification of every member still alive
+        for pid, st in list(members.items()):
+            if proc_starttime(pid) != st:
+                members.pop(pid)          # exited (or reused) after attach
+            elif not self.contains(pid):
+                report["failures"].append({"pid": pid, "reason": "left_cgroup"})
+        report["members"] = sorted(members)
+        report["stable_passes"] = stable
+        report["exited_during_scan"] = sorted(set(report["exited_during_scan"]))
+        report["passed"] = (not report["failures"] and stable >= stable_passes_required
+                            and root_pid in members and proc_starttime(root_pid) == start)
+        return report
 
     def contains(self, pid: int) -> bool:
         """True if this pid is actually in our cgroup right now."""
@@ -83,6 +172,16 @@ class CgroupController:
     def set_memory_max(self, bytes_: int) -> None:
         (self.path / "memory.max").write_text(str(bytes_))
         self.memory_max_bytes = bytes_
+
+    def readback(self) -> dict:
+        """Read the limits back from the kernel (what is actually enforced)."""
+        out = {}
+        for f in ("cpu.max", "memory.max", "memory.high", "pids.max"):
+            try:
+                out[f] = (self.path / f).read_text().strip()
+            except FileNotFoundError:
+                out[f] = None
+        return out
 
     def cpu_max(self) -> str:
         try:
@@ -188,6 +287,26 @@ class CgroupController:
         except OSError:
             return False
         return not self.path.exists()
+
+
+class CgroupSetupError(RuntimeError):
+    """A required cgroup v2 controller or control file is unavailable."""
+
+
+def proc_starttime(pid: int) -> int | None:
+    """Process start time (clock ticks since boot), field 22 of /proc/<pid>/stat.
+    None if the process does not exist or is a zombie."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return None
+    rest = stat[stat.rfind(")") + 2:].split()
+    if not rest or rest[0] == "Z":
+        return None
+    try:
+        return int(rest[19])
+    except (IndexError, ValueError):
+        return None
 
 
 # ---------- process tree walk ----------
