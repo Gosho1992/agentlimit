@@ -14,7 +14,8 @@ TIMELINE_EVENTS = {
     "manual_pause", "manual_resume", "manual_kill", "budget_extension", "agent_completed",
     "agent_stopped", "agent_budget_exceeded", "agent_cancelled", "memory_telemetry_validated",
     "session_closed", "governance_tick_error", "pause_timeout_escalation", "session_interrupted",
-    "runtime_stop_error",
+    "runtime_stop_error", "inference_call", "empty_generation", "session_start_failed",
+    "sandbox_attach_failed",
 }
 
 

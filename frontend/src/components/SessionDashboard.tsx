@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getSession, streamSession } from "../api/client";
+import { getEvents, getSession, streamSession } from "../api/client";
 import type { GovernanceState, LedgerEntry, SessionSnapshot } from "../types";
 import ControlBar from "./ControlBar";
 import EvidenceReport from "./EvidenceReport";
@@ -47,9 +47,21 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
       onError: () => {},
     });
     stopRef.current = stop;
+    // The SSE stream is the fast path; polling the signed events endpoint
+    // guarantees the timeline is complete even if the stream drops.
     const poll = async () => {
       try {
         setSnap(await getSession(sessionId));
+      } catch {
+        /* noop */
+      }
+      try {
+        const evs = await getEvents(sessionId);
+        setEntries((prev) => {
+          const seen = new Set(prev.map((e) => e.entry_hash));
+          const add = evs.filter((e: LedgerEntry) => !seen.has(e.entry_hash));
+          return add.length ? [...prev, ...add].sort((a, b) => a.timestamp_utc.localeCompare(b.timestamp_utc)) : prev;
+        });
       } catch {
         /* noop */
       }
