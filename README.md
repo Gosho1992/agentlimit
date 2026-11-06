@@ -135,7 +135,9 @@ Cost is shown as an **estimate** from a price table (default: Vultr's published 
 - **Durable global limits:** session and token caps are stored in SQLite (`/var/lib/agentlimit/usage.db`) and checked and reserved in **one immediate transaction**. They survive restarts. A session that was running when the server restarted keeps its full reservation counted as spent.
 - **`/health` vs `/ready`:** `/health` means the web app is alive. `/ready` means a governed session can be created safely right now. It checks KVM access, the cgroup controllers, root, the SDK, the signing key, the ledger directory, the inference key and model, a ≥24-character access token, and that auth is enabled.
 
-Evidence signing key fingerprint: `<filled in after deployment — see `journalctl -u agentlimit | grep fingerprint`>`
+**Evidence signing key fingerprint (Ed25519, production deployment):** `f70e:46c6:e95d:d675:0357:89c9:1a13:e7a3`
+
+**Live deployment:** https://64-177-10-84.sslip.io (Vultr VX1 Cloud Compute, Chicago). Infrastructure gate on this host: **23/23 passed** (KVM boot, verified cgroup attach, CPU and memory telemetry, egress/DNS blocked, clean guest environment, unprivileged read-only inputs, freeze/unfreeze, SIGTERM-resistant kill confirmed in 0.10 s, SDK removal, cleanup).
 
 ## Deploy on Vultr (recommended: native)
 
