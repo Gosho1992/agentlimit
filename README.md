@@ -77,12 +77,33 @@ Cost is shown as an **estimate** from a price table (default: Vultr's published 
 
 | Requirement | How it is met | Where it is proven |
 |---|---|---|
-| Process isolation | KVM microVM per session. The VMM PID is attached to a dedicated host cgroup, and the session is refused (**fail-closed**) if it can't be attached. | `sandbox_attached` ledger entry |
-| Secret hygiene | The inference key lives only in the host adapter. Guest `env={}` and `Network.none()`. Agent code runs as the unprivileged user `nobody`, and the inputs are root-owned and read-only. An in-guest probe checks egress, DNS, secret-like env vars, host paths, uid and input writability. A failed probe blocks the session. | `containment_probe` |
-| Resource limits | Session budgets for cumulative CPU (cgroup), memory, tokens (with pre-call reservation), wall clock and an optional estimated-$ cap. `memory.max` includes VMM headroom. 90-second timeout per exec. Guest NPROC/FSIZE rlimits. | `cgroup_configured`, `state_transition` |
+| Process isolation | KVM microVM per session. The VMM root PID (with its start time, so a reused PID is detected) is attached first. All live descendants are then migrated over repeated scans. The session starts only after 2 consecutive stable scans in which every live process is a verified member. A process that exits mid-scan is not a failure; a live process that can't be moved is. Missing cgroup controllers or control files abort the start. | `sandbox_attached` (full attachment report) |
+| Secret hygiene and network | The inference key lives only in the host adapter. Guest `env={}` and `Network.none()`. Agent code runs as `nobody`; inputs are root-owned and read-only. **One canonical policy** (`governance/containment.py`) requires **all 9 checks**: egress blocked, DNS blocked, no secret env vars, no host paths visible, `/workspace` mounted, inputs readable, inputs read-only, non-root uid, and guest files exactly match the signed input manifest. A missing probe field counts as a failure. Any failure refuses the session and names the check. The evidence verifier re-evaluates the signed raw probe with the same function. | `containment_probe` (raw probe + evaluation) |
+| Resource limits | Session budgets: cumulative CPU (`cpu.stat`), host-accounted memory, committed tokens (settled + reserved), wall clock, and an optional estimated-$ cap that needs a verified price. Limits are written and **read back from the kernel**, and the evidence verifier compares the readback with the budget. 90-second timeout per exec. Guest NPROC/FSIZE rlimits. | `cgroup_configured` (readback vs expected) |
 | Lifecycle discipline | Every session (completed, failed, stopped or killed) goes through `finalize()`. Each result is reported separately and truthfully: agent stopped, inference revoked, in-flight requests settled, VM stopped, VM removed (actual SDK result), cgroup emptied and removed. On startup, orphaned cgroups and sandboxes are removed, and sessions a crash left open are marked `session_interrupted`. | `session_closed` |
 
 ---
+
+## What each control actually does
+
+| Control | Kernel meaning | What AgentLimit claims |
+|---|---|---|
+| `cpu.max` | Limits instantaneous CPU bandwidth | CPU throttling. It does **not** reduce total work. |
+| `cpu.stat` | Cumulative CPU usage | Measurement against the CPU budget |
+| `memory.high` | Reclaim pressure and throttling | Soft memory-pressure intervention, at 90% of the budget |
+| `memory.max` | Hard limit (kernel OOM) | Memory ceiling = the memory budget |
+| `cgroup.freeze` | Freezes every task in the cgroup | Kernel-level pause, verified via `cgroup.events: frozen 1` |
+| `cgroup.kill` | SIGKILLs the whole hierarchy | External termination, verified via `populated 0` |
+| `pids.max` | Host tasks in the cgroup | Limit on host VMM tasks only; guest processes are limited by guest rlimits |
+
+"AgentLimit restricts the workload's CPU bandwidth and separately tracks cumulative CPU use against the session budget." It does not claim that throttling lowers total CPU consumption.
+
+## Inference cost accounting
+
+- **No generic fallback price.** Prices come from `backend/pricing.json`, copied from the Vultr console's model pricing sheet. Each entry needs both prices and a `verified_at` date. A model without a verified price shows its cost as **unknown** (not $0), and a session with a dollar cap cannot use it: the session is refused at creation (422) and every call is refused before it is sent.
+- **Committed spend:** the governor's ladder uses settled estimates **plus** in-flight reservations **plus** uncertain reservations, not just settled usage. The dashboard shows all four figures separately.
+- **Pre-call reservation:** estimated prompt tokens (conservative chars-per-token ratio, ×1.2 safety margin) plus the full completion allowance. The reservation is registered before the first `await`, so two concurrent calls can't both use the last allowance.
+- **Model downgrade on THROTTLE** is enabled only if the cheap model is listed by `/v1/models`, has a verified price, and is **strictly cheaper on both input and output**. Every call is logged (`inference_call`) with the requested model, the effective model and the reason, so every downgrade shown corresponds to a real request.
 
 ## Evidence and verification ("Prove")
 
@@ -108,7 +129,11 @@ Cost is shown as an **estimate** from a price table (default: Vultr's published 
 - **TLS:** HTTPS with Let's Encrypt when the installer is given `DOMAIN` (a free `<ip>.sslip.io` name works). Cookies are then `Secure`. Without `DOMAIN`, the deployment is plain HTTP and is described that way.
 - **Spend caps across all sessions:** at most `MAX_CONCURRENT_SESSIONS` running, `MAX_SESSIONS_PER_HOUR` started per hour, and `MAX_TOKENS_PER_DAY` tokens per day (in-flight reservations included). These sit on top of the per-session budgets.
 
-**For judges:** the access code and the evidence-key fingerprint are in the lablab submission text. Compare the fingerprint shown in the dashboard (and printed by the offline verifier) with that independently published value. Do not just trust the key the server hands out.
+**For judges:** the access code is a service credential. It is given to judges **privately** and never appears in this README, the submission text or screenshots, and it is rotated after the event. The evidence-key **fingerprint** *is* public (below and in the submission). Compare it with the fingerprint shown in the dashboard and printed by the offline verifier before trusting any signature result.
+
+- **Client IP:** nginx is directly internet-facing and overwrites `X-Real-IP` and `X-Forwarded-For` with `$remote_addr`. The app trusts `X-Real-IP` only when the TCP peer is local nginx. Login is rate-limited both at nginx (5/min per IP) and in the app; the API is limited at nginx.
+- **Durable global limits:** session and token caps are stored in SQLite (`/var/lib/agentlimit/usage.db`) and checked and reserved in **one immediate transaction**. They survive restarts. A session that was running when the server restarted keeps its full reservation counted as spent.
+- **`/health` vs `/ready`:** `/health` means the web app is alive. `/ready` means a governed session can be created safely right now. It checks KVM access, the cgroup controllers, root, the SDK, the signing key, the ledger directory, the inference key and model, a ≥24-character access token, and that auth is enabled.
 
 Evidence signing key fingerprint: `<filled in after deployment — see `journalctl -u agentlimit | grep fingerprint`>`
 
@@ -121,12 +146,13 @@ Evidence signing key fingerprint: `<filled in after deployment — see `journalc
    sudo DOMAIN=203-0-113-7.sslip.io EMAIL=you@example.com bash deploy/install_vultr.sh
    ```
    The installer sets up the venv, the Microsandbox SDK (which bundles `msb` and libkrunfw), a generated `ACCESS_TOKEN`, demo data, the dashboard build, a systemd service on 127.0.0.1:8000, nginx with SSE unbuffered, and the Let's Encrypt certificate. It then runs the infrastructure gate.
-3. In `backend/.env`, set `VULTR_INFERENCE_KEY`, `VULTR_MODEL_DEFAULT`, and optionally a genuinely cheaper `VULTR_MODEL_CHEAP`. Use IDs exactly as `/health` lists them. Then run `sudo systemctl restart agentlimit`.
-4. Check readiness: `curl -s -H "Authorization: Bearer <ACCESS_TOKEN>" http://127.0.0.1:8000/health` should show `"ready_for_governed_sessions": true`.
+3. In `backend/.env`, set `VULTR_INFERENCE_KEY`, `VULTR_MODEL_DEFAULT`, and optionally a cheaper `VULTR_MODEL_CHEAP`. Use IDs exactly as the startup log lists them. Copy the prices of those models from the Vultr console's pricing sheet into `backend/pricing.json`. Then run `sudo systemctl restart agentlimit`.
+4. Check readiness: `curl -s -H "Authorization: Bearer <ACCESS_TOKEN>" http://127.0.0.1:8000/ready` should show `"ready": true`, and `failed` lists anything that isn't.
 5. Open `https://<DOMAIN>/` and enter the access code.
 
-**Infrastructure gate.** Run this before every demo: `sudo venv/bin/python -m backend.scripts.day1_gate`. It checks:
-- KVM, cgroup v2, VM boot and exec
+**Infrastructure gate** (exit code 1 on any failure; the installer prints a release-blocking banner instead of hiding it). Run this before every demo: `sudo venv/bin/python -m backend.scripts.day1_gate`. It checks:
+- KVM, cgroup v2, the required controllers, VM boot and exec
+- memory telemetry: `memory.current` sampled *while* the guest holds a 120 MB allocation, using the **same memory policy as production**
 - host PID discovery, cgroup attach, CPU and memory accounting
 - egress blocked, no secrets in the guest, unprivileged agent, read-only inputs, host paths invisible
 - freeze/unfreeze, killing a **SIGTERM-resistant** workload, SDK removal after the kill, and cleanup
@@ -139,7 +165,7 @@ Its output is saved to `/var/lib/agentlimit/day1_gate.txt`. Claim only what pass
 
 ```bash
 pip install -r backend/requirements.txt
-python -m pytest backend/tests -q        # 72 pass anywhere; 3 kernel tests run on cgroup v2 as root
+python -m pytest backend/tests -q        # 127 pass anywhere; 3 kernel tests run on cgroup v2 as root
 cd frontend && npm install && npm run dev
 ```
 
@@ -147,7 +173,7 @@ The tests use the real budget objects, governor, interventions, orchestrator, in
 
 ## API
 
-`POST /auth/login` · `GET /auth/status` · `POST /sessions` · `GET /sessions` · `GET /sessions/{id}` · `GET /sessions/{id}/stream` (SSE) · `POST /sessions/{id}/pause|resume|kill` · `GET /sessions/{id}/evidence` · `GET …/evidence/verify` · `GET …/evidence/export` · `GET …/evidence/public-key` · `POST …/evidence/tamper-test` · `GET /health`
+`GET /health` · `GET /ready` · `POST /auth/login` · `GET /auth/status` · `POST /sessions` · `GET /sessions` · `GET /sessions/{id}` · `GET /sessions/{id}/stream` (SSE) · `POST /sessions/{id}/pause|resume|kill` · `GET /sessions/{id}/evidence` · `GET …/evidence/verify` · `GET …/evidence/export` · `GET …/evidence/public-key` · `POST …/evidence/tamper-test` · `GET /health`
 
 ## What this project does not claim
 

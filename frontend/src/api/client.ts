@@ -16,8 +16,15 @@ export async function createSession(body: {
     body: JSON.stringify(body),
   });
   if (!r.ok) {
-    const detail = await r.text();
-    throw new Error(`createSession failed: ${r.status} ${detail}`);
+    let msg = `${r.status}`;
+    try {
+      const j = await r.json();
+      const d = j.detail;
+      msg = typeof d === "string" ? d : `${d.category}: ${d.detail} (session ${d.session_id} — evidence recorded)`;
+    } catch {
+      /* noop */
+    }
+    throw new Error(`Session not started: ${msg}`);
   }
   return r.json();
 }

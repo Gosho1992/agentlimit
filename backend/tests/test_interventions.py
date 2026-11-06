@@ -110,13 +110,14 @@ async def test_kill_fails_when_runtime_cannot_remove_sandbox(parts):
 
 
 @pytest.mark.asyncio
-async def test_throttle_does_not_claim_model_downgrade_without_cheap_model(parts, monkeypatch):
+async def test_throttle_does_not_claim_model_downgrade_without_validated_cheap_model(parts, monkeypatch):
     from backend.config import settings
+    from backend.orchestrator import inference_pricing as pricing, model_registry
     ctrl, cg, orch, ledger, _ = parts
-    orch.inference.cheap_model = settings.vultr_model_default     # same model -> no downgrade
+    monkeypatch.setattr(settings, "vultr_model_cheap", "")
+    model_registry.validate([settings.vultr_model_default])
     await ctrl.throttle()
     ev = [e for e in ledger.read_all() if e["event_type"] == "throttle_applied"][-1]["payload"]
-    assert isinstance(ev["model_downgrade"], str) and "not configured" in ev["model_downgrade"]
+    assert "unavailable" in ev["model_downgrade"] and "CPU throttling only" in ev["model_downgrade"]
     assert orch.inference._effective_model(settings.vultr_model_default) == settings.vultr_model_default
-    orch.inference.cheap_model = "small-model"
-    assert orch.inference._effective_model(settings.vultr_model_default) == "small-model"
+    assert ev["applied"] is True and ev["cpu_max_readback"].startswith("50000")

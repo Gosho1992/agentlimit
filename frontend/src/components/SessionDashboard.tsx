@@ -9,6 +9,18 @@ import ResourceGauge from "./ResourceGauge";
 
 const LADDER: GovernanceState[] = ["NORMAL", "ALERT", "RECOMMEND", "THROTTLE", "PAUSE", "KILL"];
 
+const CONTAINMENT_LABELS: Record<string, string> = {
+  network_egress_blocked: "Network egress blocked",
+  dns_blocked: "DNS resolution blocked",
+  no_secrets_in_environment: "No API keys / secrets in guest environment",
+  no_host_paths_visible: "Host ledger, keys and cgroup tree invisible",
+  workspace_mounted: "/workspace present",
+  inputs_readable: "Inputs readable by the agent",
+  inputs_read_only: "Inputs read-only to the agent",
+  unprivileged_execution: "Agent code runs unprivileged (non-root uid)",
+  inputs_match_manifest: "Guest sees exactly the hashed input files",
+};
+
 const CHECK_LABELS: Record<string, string> = {
   session_marked_terminated: "Session marked terminated",
   inference_revoked: "Inference revoked (no more model calls)",
@@ -113,7 +125,7 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
           <h3>Observed by the governor (host-side, not self-reported)</h3>
           {b && snap && (
             <>
-              <ResourceGauge label="CPU (cumulative, cgroup cpu.stat)" used={snap.cpu_usec / 1e6} limit={b.cpu_budget_usec / 1e6} unit="s" />
+              <ResourceGauge label="CPU used vs budget (cumulative, host cpu.stat)" used={snap.cpu_usec / 1e6} limit={b.cpu_budget_usec / 1e6} unit="s" />
               <ResourceGauge
                 label={`Memory peak, host-accounted microVM (memory.peak)${snap.memory_telemetry_valid ? "" : " · telemetry not yet validated"}`}
                 used={snap.memory_peak_bytes / 2 ** 20}
@@ -121,7 +133,7 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
                 unit="MB"
               />
               <ResourceGauge
-                label={`Tokens (Vultr Inference, ${snap.inference.calls ?? 0} calls)`}
+                label={`Tokens committed (settled + reserved; ${snap.inference.calls ?? 0} calls)`}
                 used={snap.tokens}
                 limit={b.token_limit}
                 unit="tok"
@@ -129,11 +141,14 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
               />
               <ResourceGauge label="Wall clock" used={snap.wall_seconds} limit={b.wall_clock_limit_seconds} unit="s" />
               <p className="muted small">
-                Estimated cost ${snap.inference.estimated_cost_usd.toFixed(5)} · model {snap.inference.last_model}
+                Cost (estimate{snap.inference.cost_known === false ? ", model price UNKNOWN" : ""}): settled $
+                {snap.inference.estimated_cost_usd.toFixed(5)} · in flight ${(snap.inference.in_flight_reserved_cost_usd ?? 0).toFixed(5)} ·
+                uncertain ${(snap.inference.uncertain_reserved_cost_usd ?? 0).toFixed(5)} · committed $
+                {(snap.inference.committed_cost_usd ?? 0).toFixed(5)} · effective model {snap.inference.effective_model ?? snap.inference.last_model}
                 {snap.inference.throttled
                   ? snap.inference.model_downgrade_available
                     ? ` (THROTTLE: downgraded to ${snap.inference.cheap_model})`
-                    : " (THROTTLE: CPU throttled; no cheaper model configured)"
+                    : ` (THROTTLE: CPU bandwidth restricted; model downgrade unavailable — ${snap.inference.downgrade_reason ?? "not configured"})`
                   : ""}
                 {snap.inference.cost_limit_usd ? ` · cap $${snap.inference.cost_limit_usd}` : ""}
                 {snap.inference.in_flight ? ` · ${snap.inference.in_flight} request in flight` : ""}
@@ -148,24 +163,29 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
         <div className="card">
           <h3>Containment</h3>
           {c ? (
-            <ul className="checklist">
-              <li className={c.egress_blocked ? "ok" : "fail"}>{c.egress_blocked ? "✓" : "✗"} Network egress blocked inside the microVM</li>
-              <li className={c.no_secrets_in_env ? "ok" : "fail"}>{c.no_secrets_in_env ? "✓" : "✗"} No API keys / secrets in guest environment</li>
-              <li className={!c.host_paths_visible?.length ? "ok" : "fail"}>
-                {!c.host_paths_visible?.length ? "✓" : "✗"} Host ledger, keys and cgroup tree invisible to the guest
-              </li>
-              <li className={c.inputs_read_only ? "ok" : "muted"}>
-                {c.inputs_read_only ? "✓" : "–"} Agent runs as uid {c.uid ?? "?"}; inputs read-only to it
-              </li>
-              <li className="ok">✓ Guest sees only: {(c.workspace_files || []).join(", ") || "—"}</li>
-              <li className={snap?.lifecycle?.workload_gone ? "ok" : "muted"}>
-                {snap?.lifecycle
-                  ? snap.lifecycle.sandbox_removed && snap.lifecycle.workload_gone && snap.lifecycle.cgroup_removed
-                    ? "✓ microVM stopped & removed, cgroup removed"
-                    : `✗ cleanup incomplete${snap.lifecycle.sandbox_stop_error ? ": " + snap.lifecycle.sandbox_stop_error : ""}`
-                  : "… microVM destroyed when session ends"}
-              </li>
-            </ul>
+            <>
+              <p className={c.passed ? "ok" : "fail"}>
+                <strong>{c.passed ? "All mandatory checks passed (verified in-guest before execution)" : `FAILED: ${c.failed_checks.join(", ")}`}</strong>
+              </p>
+              <ul className="checklist">
+                {Object.entries(c.checks || {}).map(([k, v]) => (
+                  <li key={k} className={v ? "ok" : "fail"}>{v ? "✓" : "✗"} {CONTAINMENT_LABELS[k] ?? k}</li>
+                ))}
+                <li className={snap?.lifecycle?.sandbox_removed && snap?.lifecycle?.workload_gone && snap?.lifecycle?.cgroup_removed ? "ok" : snap?.lifecycle ? "fail" : "muted"}>
+                  {snap?.lifecycle
+                    ? snap.lifecycle.sandbox_removed && snap.lifecycle.workload_gone && snap.lifecycle.cgroup_removed
+                      ? "✓ microVM stopped & removed, cgroup removed"
+                      : `✗ cleanup incomplete${snap.lifecycle.sandbox_stop_error ? ": " + snap.lifecycle.sandbox_stop_error : ""}`
+                    : "… microVM destroyed when the session ends"}
+                </li>
+              </ul>
+              {snap?.memory_plan && (
+                <p className="muted small">
+                  Memory boundary: {snap.memory_plan.boundary}. memory.max {Math.round(snap.memory_plan.host_memory_max_bytes / 2 ** 20)} MB ·
+                  memory.high {Math.round(snap.memory_plan.memory_high_bytes / 2 ** 20)} MB · guest RAM {snap.memory_plan.guest_ram_mb} MB
+                </p>
+              )}
+            </>
           ) : (
             <p className="muted">Probe pending…</p>
           )}
