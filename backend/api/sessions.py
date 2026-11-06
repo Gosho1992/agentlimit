@@ -94,6 +94,12 @@ def _archived_snapshot(session_id: str):
     sm = summarize(entries)
     probe = next((e["payload"] for e in reversed(entries) if e["event_type"] == "containment_probe"), {})
     sample = next((e["payload"] for e in reversed(entries) if e["event_type"] == "resource_sample"), {})
+    fm = (sm["lifecycle"] or {}).get("final_metrics") or {}
+    if fm:
+        sample = {**sample, "cpu_usage_usec": fm.get("cpu_usec", sample.get("cpu_usage_usec", 0)),
+                  "memory_current_bytes": fm.get("memory_bytes", 0),
+                  "memory_peak_bytes": fm.get("memory_peak_bytes", sample.get("memory_peak_bytes", 0)),
+                  "wall_seconds": round(fm.get("wall_seconds", sample.get("wall_seconds", 0)), 2)}
     attach = next((e["payload"] for e in reversed(entries) if e["event_type"] == "sandbox_attached"), {})
     rt_ev = next((e["payload"] for e in reversed(entries) if e["event_type"] == "runtime_started"), {})
     inf = sm["inference"] or {"input_tokens": 0, "output_tokens": 0, "total_tokens": sample.get("token_spend", 0),
@@ -119,15 +125,16 @@ async def get_session(session_id: str):
     if not rt:
         return _archived_snapshot(session_id)
     eng, orch = rt.engine, rt.orchestrator
+    fm = eng._frozen or {}
     return {
         "session_id": session_id,
         "task": rt.task,
         "state": eng.state.value,
         "agent_status": orch.status,
         "steps": orch.step_count,
-        "cpu_usec": rt.cgroup.cpu_usage_usec(),
-        "memory_bytes": rt.cgroup.memory_current(),
-        "memory_peak_bytes": rt.cgroup.memory_peak(),
+        "cpu_usec": fm.get("cpu_usec", rt.cgroup.cpu_usage_usec()),
+        "memory_bytes": fm.get("memory_bytes", rt.cgroup.memory_current()),
+        "memory_peak_bytes": fm.get("memory_peak_bytes", rt.cgroup.memory_peak()),
         "tokens": orch.inference.total_tokens(),
         "wall_seconds": round(eng.wall_seconds, 2),
         "utilisation_pct": {k: round(v, 1) for k, v in eng.last_utilisation.items()},

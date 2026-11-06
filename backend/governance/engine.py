@@ -82,6 +82,7 @@ class GovernanceEngine:
         self._memory_baseline = 0
 
         self._session_start = time.monotonic()
+        self._frozen: dict = {}
         self._manual_pause = False
         self._manual_kill = False
         self._kill_reason = ""
@@ -95,7 +96,17 @@ class GovernanceEngine:
 
     @property
     def wall_seconds(self) -> float:
-        return time.monotonic() - self._session_start
+        end = self._frozen.get("wall_seconds") if self._frozen else None
+        return end if end is not None else time.monotonic() - self._session_start
+
+    def freeze_metrics(self) -> dict:
+        """Snapshot the final host measurements before the cgroup is removed,
+        so a closed session keeps showing what was actually measured."""
+        if not self._frozen:
+            self._frozen = {"cpu_usec": self.cg.cpu_usage_usec(), "memory_bytes": self.cg.memory_current(),
+                            "memory_peak_bytes": self.cg.memory_peak(),
+                            "wall_seconds": time.monotonic() - self._session_start}
+        return self._frozen
 
     # ---------- public API ----------
 

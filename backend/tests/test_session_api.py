@@ -373,3 +373,18 @@ async def test_kill_and_pause_race_ends_in_kill_and_resume_is_refused(app_env):
         assert k.json()["verdict"] == "KILL_CONFIRMED"
         s = await wait_closed(c, sid)
         assert s["state"] == "KILL"
+
+
+@pytest.mark.asyncio
+async def test_closed_session_keeps_final_measurements_and_wall_clock(app_env):
+    app, holder = app_env
+    cg = FakeCgroup()
+    cg.cpu, cg.peak = 2_500_000, 200 * 2**20
+    holder["cgroup"] = cg
+    async with _auth_client(app) as c:
+        sid = (await _start(c)).json()["session_id"]
+        s1 = await wait_closed(c, sid)
+        await asyncio.sleep(0.5)
+        s2 = (await c.get(f"/sessions/{sid}")).json()
+        assert s2["cpu_usec"] == 2_500_000 and s2["memory_peak_bytes"] == 200 * 2**20
+        assert s2["wall_seconds"] == s1["wall_seconds"]       # frozen at close

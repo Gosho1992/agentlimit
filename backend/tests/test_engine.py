@@ -153,3 +153,30 @@ async def test_successful_run_records_artifact(tmp_path):
     assert out and out["stdout_sha256"]
     done = [e for e in ledger.read_all() if e["event_type"] == "agent_completed"][0]["payload"]
     assert open(done["artifact_path"]).read() == '{"a": 1}\n'
+
+
+@pytest.mark.asyncio
+async def test_empty_model_reply_is_retried_not_executed(tmp_path):
+    import httpx, json
+    replies = iter([{"choices": [{"message": {"content": "", "reasoning_content": "thinking..."},
+                                  "finish_reason": "length"}], "usage": {"prompt_tokens": 100, "completion_tokens": 1500}},
+                    {"choices": [{"message": {"content": "```python\nprint('{\"a\": 1}')\n```"}}],
+                     "usage": {"prompt_tokens": 120, "completion_tokens": 50}}])
+
+    async def handler(request):
+        return httpx.Response(200, json=next(replies))
+    rt = FakeRuntime([{"stdout": '{"a": 1}\n', "stderr": "", "exit_code": 0}])
+    eng, orch, cg, ledger, *_ = make(tmp_path, runtime=rt, transport=httpx.MockTransport(handler))
+    out = await orch.run()
+    assert out and out["stdout"].strip() == '{"a": 1}'
+    assert rt.execs == 1                                    # the empty reply was never executed
+    assert any(e["event_type"] == "empty_generation" for e in ledger.read_all())
+
+
+@pytest.mark.asyncio
+async def test_exit_zero_with_no_output_is_not_completion(tmp_path):
+    rt = FakeRuntime([{"stdout": "", "stderr": "", "exit_code": 0}])
+    eng, orch, cg, ledger, *_ = make(tmp_path, runtime=rt)
+    out = await orch.run()
+    assert out is None and orch.status != "completed"
+    assert not any(e["event_type"] == "agent_completed" for e in ledger.read_all())

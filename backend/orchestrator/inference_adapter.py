@@ -177,7 +177,7 @@ class InferenceAdapter:
     async def _send(self, payload: dict) -> dict:
         url = f"{settings.vultr_inference_base}/chat/completions"
         headers = {"Authorization": f"Bearer {settings.vultr_inference_key}"}
-        async with httpx.AsyncClient(timeout=90, transport=self._transport) as client:
+        async with httpx.AsyncClient(timeout=settings.inference_timeout_s, transport=self._transport) as client:
             r = await client.post(url, headers=headers, json=payload)
             r.raise_for_status()
             return r.json()
