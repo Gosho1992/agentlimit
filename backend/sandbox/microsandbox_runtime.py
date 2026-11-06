@@ -35,6 +35,8 @@ except ImportError:
 
 log = logging.getLogger("agentlimit.runtime.microsandbox")
 
+CLEAN_ENV = ["HOME=/tmp", "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "PYTHONDONTWRITEBYTECODE=1"]
+
 # Probe executed inside the guest. Prints one JSON line.
 CONTAINMENT_PROBE = r'''
 import json, os, socket
@@ -131,9 +133,12 @@ class MicrosandboxRuntime:
             raise RuntimeError("sandbox not started")
         try:
             user = settings.sandbox_exec_user or None
-            out = await self._sandbox.exec("python3", ["-c", code], cwd="/tmp" if user else "/workspace",
-                                           user=user, env={"HOME": "/tmp"},
-                                           timeout=timeout, rlimits=self._rlimits())
+            # `env -i` gives the agent's process a COMPLETELY clean environment:
+            # nothing from the image (e.g. python images set GPG_KEY) or the host
+            # is inherited, only the minimal variables listed here.
+            out = await self._sandbox.exec("env", ["-i", *CLEAN_ENV, "python3", "-c", code],
+                                           cwd="/tmp" if user else "/workspace",
+                                           user=user, timeout=timeout, rlimits=self._rlimits())
         except ExecTimeoutError:
             return {"stdout": "", "stderr": f"timeout after {timeout}s", "exit_code": -9}
         return {

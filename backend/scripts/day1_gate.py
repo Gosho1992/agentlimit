@@ -127,9 +127,19 @@ async def main():
             await asyncio.wait_for(task, timeout=5)
         except Exception:
             pass
-        alive = Path(f"/proc/{pid}").exists()
+        # A SIGKILLed process stays in /proc as a zombie until its parent reaps
+        # it; "alive" means running with the SAME start time (same check as the
+        # production kill verifier), so zombies and reused PIDs count as gone.
+        vmm_start = att.get("root_starttime")
+        alive = True
+        for _ in range(20):
+            st = proc_starttime(pid)
+            alive = st is not None and st == vmm_start
+            if not alive:
+                break
+            await asyncio.sleep(0.1)
         record("kill_sigterm_resistant_workload", killed and not cg.is_populated() and not alive,
-               f"populated0={not cg.is_populated()} vmm_alive={alive} in {elapsed:.2f}s")
+               f"populated0={not cg.is_populated()} vmm_running={alive} kill_confirmed_in={elapsed:.2f}s")
         stop = await rt.stop(force=True)
         record("sdk_remove_after_cgroup_kill", bool(stop.get("removed")), str(stop))
     finally:

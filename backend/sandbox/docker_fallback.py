@@ -87,7 +87,8 @@ class DockerFallbackRuntime:
         if not self._started:
             raise RuntimeError("container not started")
         proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", "-u", "nobody", "-w", "/tmp", self.container_name, "python", "-c", code,
+            "docker", "exec", "-u", "nobody", "-w", "/tmp", self.container_name,
+            "env", "-i", "HOME=/tmp", "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "python", "-c", code,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
