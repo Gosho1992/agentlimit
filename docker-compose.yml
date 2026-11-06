@@ -1,0 +1,24 @@
+# Alternative to the native systemd install (deploy/install_vultr.sh, recommended).
+# The backend needs KVM and the host cgroup v2 tree to govern microVMs.
+services:
+  agentlimit:
+    build: .
+    ports:
+      - "8000:8000"
+    # cp backend/.env.example backend/.env and set ACCESS_TOKEN + VULTR_INFERENCE_KEY first
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      - CGROUP_ROOT=/sys/fs/cgroup/agentlimit
+      - LEDGER_DIR=/var/lib/agentlimit/ledger
+      - SIGNER_KEY_PATH=/var/lib/agentlimit/keys/signer.ed25519
+    devices:
+      - /dev/kvm:/dev/kvm
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./data/ledger:/var/lib/agentlimit/ledger
+      - ./data/keys:/var/lib/agentlimit/keys
+    privileged: true
+    cgroup: host
+    restart: unless-stopped

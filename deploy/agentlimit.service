@@ -1,0 +1,16 @@
+[Unit]
+Description=AgentLimit external runtime governor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Root is required: the governor writes the host cgroup v2 tree and opens /dev/kvm.
+User=root
+WorkingDirectory=__REPO__
+EnvironmentFile=__REPO__/backend/.env
+ExecStart=__REPO__/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
