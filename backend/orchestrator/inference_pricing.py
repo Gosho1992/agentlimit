@@ -1,32 +1,95 @@
 """
-Per-model token pricing (USD per 1M tokens) used for ESTIMATED cost.
+Model-specific, VERIFIED pricing catalogue (USD per 1M tokens).
 
-AgentLimit labels every dollar figure as an estimate: authoritative spend is
-in the Vultr console Usage tab. Vultr's Serverless Inference docs state
-$0.55 per 1M input and $2.75 per 1M output tokens, used here as the default
-for any model not listed. Override per model with the PRICING_OVERRIDES env
-var, e.g.  PRICING_OVERRIDES='{"my-model": [0.1, 0.25]}'
+There is deliberately NO generic fallback price: an unknown model's cost is
+reported as UNKNOWN, and a session with a dollar cap cannot use a model that
+has no verified price.
+
+Fill backend/pricing.json (or PRICING_FILE) from the Vultr Serverless
+Inference model pricing sheet in the Vultr console, for exactly the models
+you enable:
+
+{
+  "<model-id-as-listed-by-/v1/models>": {
+    "input_per_million": 0.00, "output_per_million": 0.00,
+    "currency": "USD", "source": "Vultr console model pricing sheet",
+    "verified_at": "2026-11-06"
+  }
+}
+PRICING_OVERRIDES (same JSON shape, env var) is merged on top.
 """
 
 import json
 import os
+from pathlib import Path
 
-DEFAULT_PRICE = (0.55, 2.75)
-
-PRICING: dict[str, tuple[float, float]] = {}
-
-_overrides = os.environ.get("PRICING_OVERRIDES", "")
-if _overrides:
-    try:
-        PRICING.update({k: (float(v[0]), float(v[1])) for k, v in json.loads(_overrides).items()})
-    except Exception:
-        pass
+CATALOGUE_VERSION_KEY = "_version"
 
 
-def price_for(model_id: str) -> tuple[float, float]:
-    return PRICING.get(model_id, DEFAULT_PRICE)
+class UnknownModelPricing(ValueError):
+    pass
 
 
-def cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
-    p_in, p_out = price_for(model_id)
-    return input_tokens / 1_000_000 * p_in + output_tokens / 1_000_000 * p_out
+def _load() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    path = Path(os.environ.get("PRICING_FILE", Path(__file__).resolve().parents[1] / "pricing.json"))
+    sources = []
+    if path.exists():
+        try:
+            sources.append(json.loads(path.read_text()))
+        except Exception:
+            pass
+    if os.environ.get("PRICING_OVERRIDES"):
+        try:
+            sources.append(json.loads(os.environ["PRICING_OVERRIDES"]))
+        except Exception:
+            pass
+    for src in sources:
+        for model, p in src.items():
+            if model.startswith("_") or not isinstance(p, dict):
+                continue
+            try:
+                entry = {"input_per_million": float(p["input_per_million"]),
+                         "output_per_million": float(p["output_per_million"]),
+                         "currency": p.get("currency", "USD"), "source": p.get("source", ""),
+                         "verified_at": p.get("verified_at", "")}
+            except (KeyError, TypeError, ValueError):
+                continue
+            if entry["input_per_million"] > 0 and entry["output_per_million"] > 0 and entry["verified_at"]:
+                out[model] = entry
+    return out
+
+
+PRICING: dict[str, dict] = _load()
+
+
+def reload() -> None:
+    PRICING.clear()
+    PRICING.update(_load())
+
+
+def has_price(model_id: str) -> bool:
+    return model_id in PRICING
+
+
+def price_for(model_id: str) -> dict:
+    p = PRICING.get(model_id)
+    if p is None:
+        raise UnknownModelPricing(f"no verified pricing configured for model {model_id!r}")
+    return p
+
+
+def cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Estimated cost, or None when the model has no verified price."""
+    p = PRICING.get(model_id)
+    if p is None:
+        return None
+    return input_tokens / 1e6 * p["input_per_million"] + output_tokens / 1e6 * p["output_per_million"]
+
+
+def is_strictly_cheaper(default_model: str, candidate: str) -> bool:
+    """Cheaper on BOTH input and output; otherwise not advertised as cheaper."""
+    if not (has_price(default_model) and has_price(candidate)):
+        return False
+    d, c = PRICING[default_model], PRICING[candidate]
+    return c["input_per_million"] < d["input_per_million"] and c["output_per_million"] < d["output_per_million"]
