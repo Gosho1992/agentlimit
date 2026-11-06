@@ -305,6 +305,7 @@ class SessionManager:
                 await asyncio.wait_for(rt.engine_task, timeout=3.0)
         await step("engine", _stop_engine)
 
+        final_metrics = rt.engine.freeze_metrics()
         stop = await step("runtime", lambda: asyncio.wait_for(rt.runtime.stop(force=True), timeout=10.0)) or {}
         if not stop.get("removed"):
             rt.ledger.append("runtime_stop_error", stop or {"error": result.get("runtime_error")})
@@ -342,6 +343,7 @@ class SessionManager:
             "total_tokens_recorded": inf.total_tokens(),
             "inference": inf.snapshot(),
             "wall_seconds": round(rt.engine.wall_seconds, 2),
+            "final_metrics": final_metrics,
             **result,
         }
         lifecycle["clean"] = all(lifecycle[k] is True for k in (

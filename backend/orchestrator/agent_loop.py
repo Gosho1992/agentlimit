@@ -20,7 +20,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from backend.orchestrator.code_generator import CodeGenerator
+from backend.orchestrator.code_generator import CodeGenerator, EmptyGeneration
 from backend.orchestrator.context_manager import ContextManager
 from backend.orchestrator.inference_adapter import BudgetExceeded, InferenceAdapter, InferenceRevoked
 
@@ -189,6 +189,18 @@ class AgentOrchestrator:
                 self.status = "budget_exceeded"
                 self.ledger.append("agent_budget_exceeded", {"step_id": step_id, "reason": str(e)})
                 return None
+            except EmptyGeneration as e:
+                self.ledger.append("empty_generation", {"step_id": step_id, "detail": str(e),
+                                                        "model": self.inference.last_model})
+                self.generator.record_empty(str(e))
+                await self._record_step_tokens(prev_cumulative, step_id)
+                sig = "empty_generation"
+                self.consecutive_identical_errors = self.consecutive_identical_errors + 1 \
+                    if self.last_error_signature == sig else 1
+                self.last_error_signature = sig
+                if self.consecutive_identical_errors >= AGENT_SELF_RETRY_LIMIT:
+                    return self._stopped("agent_self_retry_limit")
+                continue
 
             code_sha = hashlib.sha256(code.encode()).hexdigest()
             self.ledger.append("code_generated", {
@@ -221,8 +233,13 @@ class AgentOrchestrator:
             })
             await self._record_step_tokens(prev_cumulative, step_id)
 
-            if result["exit_code"] == 0 and not self.terminated:
+            if result["exit_code"] == 0 and result["stdout"].strip() and not self.terminated:
                 return self._complete(step_id, result["stdout"])
+            if result["exit_code"] == 0 and not result["stdout"].strip():
+                # exit 0 with no output is not a result: treat as a failed attempt
+                result = {**result, "stderr": (result["stderr"] or "") +
+                          "\n[agentlimit] the program exited 0 but printed nothing to stdout; "
+                          "print the final result."}
 
             err_sig = (result["stderr"] or "").strip()[-200:]
             if err_sig and err_sig == self.last_error_signature:

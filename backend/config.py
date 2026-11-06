@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     inflight_drain_s: float = 15.0
     token_estimate_chars_per_token: float = 3.0   # conservative (real ~3.5-4)
     token_estimate_margin: float = 1.2            # extra safety margin on prompt estimate
+    agent_max_completion_tokens: int = 6000       # reasoning models need room before the code
+    inference_timeout_s: float = 180.0
 
     # --- public-deployment protection ---
     access_token: str = ""              # REQUIRED unless auth_disabled
