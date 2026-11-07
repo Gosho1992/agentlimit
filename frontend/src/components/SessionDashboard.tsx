@@ -16,7 +16,7 @@ const TITLES: Record<string, string> = {
   reconcile: "Useful work, checked",
   runaway: "Out-of-control agent, stopped",
   retry: "Agent stuck in a loop",
-  memory: "Agent eating memory",
+  memory: "Agent filling its memory",
 };
 
 export default function SessionDashboard({ sessionId, onBack, access = OPERATOR, backLabel = "← Back" }: {
@@ -105,7 +105,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
       <div className="dash-top">
         <button className="btn-ghost" onClick={onBack}>{backLabel}</button>
         <div className="dash-title">
-          <h2>{title}</h2>
+          <h1 className="dash-h1">{title}</h1>
           <span className="muted small">
             {snap?.archived ? "Recorded real run · replay from its signed record" : closed ? "Finished run" : "Live run on a Vultr server"}
             {" · "}run <code>{sessionId}</code>

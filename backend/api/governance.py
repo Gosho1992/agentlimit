@@ -63,8 +63,11 @@ async def resume(session_id: str, extra_cpu_seconds: int = 0):
 
 @router.post("/{session_id}/kill")
 async def kill(session_id: str):
-    """Returns killed=true ONLY when every termination check is verified."""
+    """Returns killed=true ONLY when every termination check is verified.
+    A closed run is final: 409, and nothing is changed or recorded."""
     rt = _rt(session_id)
+    if rt.closed or rt.ledger.sealed:
+        raise HTTPException(409, "Run already closed")
     result = rt.engine.termination
     if not result:
         result = await rt.engine.kill_now("operator_kill")

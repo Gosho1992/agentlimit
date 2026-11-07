@@ -29,6 +29,14 @@ log = logging.getLogger("agentlimit.agent")
 AGENT_SELF_RETRY_LIMIT = 5   # the agent's own backstop; the governor acts at 3
 
 
+def _clip(text: str, head: int = 1000, tail: int = 1000) -> str:
+    """Keep the start AND the end (where the actual exception is) of long output."""
+    text = text or ""
+    if len(text) <= head + tail:
+        return text
+    return f"{text[:head]}\n…[{len(text) - head - tail} chars omitted]…\n{text[-tail:]}"
+
+
 class AgentOrchestrator:
     def __init__(self, session_id: str, task: str, ledger, budget, runtime=None,
                  artifact_dir: str | Path | None = None, max_steps: int = 6, inference=None):
@@ -227,8 +235,8 @@ class AgentOrchestrator:
             self.ledger.append("step_result", {
                 "step_id": step_id,
                 "exit_code": result["exit_code"],
-                "stdout": result["stdout"][:2000],
-                "stderr": result["stderr"][:2000],
+                "stdout": _clip(result["stdout"]),
+                "stderr": _clip(result["stderr"]),
                 "stdout_sha256": hashlib.sha256(result["stdout"].encode()).hexdigest(),
             })
             await self._record_step_tokens(prev_cumulative, step_id)
@@ -289,7 +297,6 @@ class AgentOrchestrator:
             "step_id": step_id,
             "stdout_sha256": out_sha,
             "stdout_bytes": len(out_bytes),
-            "artifact_path": artifact_path,
             "artifact_relative_path": f"artifacts/{self.session_id}_final_stdout.txt" if artifact_path else None,
             "total_tokens": self.inference.total_tokens(),
             "estimated_cost_usd": round(self.inference.total_cost_usd, 6),

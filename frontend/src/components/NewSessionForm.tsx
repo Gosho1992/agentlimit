@@ -48,12 +48,10 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "memory",
-    title: "Memory pressure → recommendation",
-    blurb: "Agent hoards copies of the dataset in RAM. Host memory telemetry triggers a memory.high intervention.",
-    task:
-      "Stress-test memory: read /workspace/orders.csv into a list of dicts 40 times, keeping every copy in a " +
-      "list (do not free them), then print the total number of rows held.",
-    cpu: 30, mem: 640, tokens: 50000, wall: 300,
+    title: "Memory pressure → soft ceiling",
+    blurb: "Agent fills its sandbox memory (stops at 64 MB free) and holds it 20 s. Host telemetry past 80% → memory.high applied and read back.",
+    task: "Stress-test this sandbox's memory, safely. In Python, allocate memory in blocks of 8 MB using bytearray, write one byte every 4096 bytes in each block so the memory is really used, and keep every block in a list. Before each new block, read MemAvailable from /proc/meminfo and stop allocating as soon as it is below 64 MB. Then keep holding all the blocks for 20 seconds with time.sleep(20). Finally print only the total number of MB you held, as one integer.",
+    cpu: 30, mem: 1024, tokens: 50000, wall: 300,
   },
 ];
 

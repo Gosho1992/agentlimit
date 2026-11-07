@@ -41,14 +41,13 @@ SCENARIOS = [
     },
     {
         "id": "memory",
-        "title": "Agent eating memory",
-        "plain": "The agent keeps 40 copies of the data in memory. AgentLimit notices memory filling up "
-                 "and squeezes it before it can take over the machine.",
-        "expect": "Turns yellow and AgentLimit applies a memory squeeze.",
+        "title": "Agent filling its memory",
+        "plain": "The agent fills almost all of its sandbox's memory and holds it. AgentLimit sees memory pass 80% "
+                 "from outside the sandbox and sets a soft memory ceiling, then reads it back to confirm it.",
+        "expect": "Turns yellow; the advice card shows the memory ceiling Applied and Verified.",
         "expect_color": "yellow",
-        "task": ("Stress-test memory: read /workspace/orders.csv into a list of dicts 40 times, keeping every copy in a "
-                 "list (do not free them), then print the total number of rows held."),
-        "cpu": 30, "mem": 640, "tokens": 50000, "wall": 300, "cost": 0.25,
+        "task": ("Stress-test this sandbox's memory, safely. In Python, allocate memory in blocks of 8 MB using bytearray, write one byte every 4096 bytes in each block so the memory is really used, and keep every block in a list. Before each new block, read MemAvailable from /proc/meminfo and stop allocating as soon as it is below 64 MB. Then keep holding all the blocks for 20 seconds with time.sleep(20). Finally print only the total number of MB you held, as one integer."),
+        "cpu": 30, "mem": 1024, "tokens": 50000, "wall": 300, "cost": 0.25,
     },
 ]
 

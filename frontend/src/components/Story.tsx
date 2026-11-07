@@ -17,7 +17,7 @@ export default function Story({ entries, technical }: { entries: LedgerEntry[]; 
       ) : (
         <p className="muted">Getting ready…</p>
       )}
-      <ol className="story-list">
+      <ol className="story-list" tabIndex={0} aria-label="Timeline of this run, newest first">
         {rows.slice().reverse().map(({ e, n }) => (
           <li key={e.entry_hash}>
             <span className={`story-dot sig-${n.signal ?? "grey"}`} />

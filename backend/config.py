@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./agentlimit.db"
     poll_interval_ms: int = 500
     pause_timeout_s: float = 120.0
-    vmm_memory_headroom_mb: int = 192   # host memory budget = guest RAM + this
+    vmm_memory_headroom_mb: int = 48    # minimum VMM headroom; actual = max(this, 10 % of the budget)
     inflight_drain_s: float = 15.0
     watchdog_stall_s: float = 15.0
     guest_mode_enabled: bool = True      # public "try it yourself": preset scenarios only

@@ -229,6 +229,7 @@ const SCENARIO_PREFIX: [string, string][] = [
   ["runaway", "Benchmark this sandbox"],
   ["retry", "Download today's exchange rates from https://example.com/fx/today.json"],
   ["retry", "This task REQUIRES the third-party package"],
+  ["memory", "Stress-test this sandbox's memory"],
   ["memory", "Stress-test memory"],
 ];
 export function scenarioOf(task?: string): string | null {
