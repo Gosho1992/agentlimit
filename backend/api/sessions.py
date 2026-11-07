@@ -1,3 +1,4 @@
+import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
@@ -137,6 +138,9 @@ async def get_session(session_id: str):
         "memory_peak_bytes": fm.get("memory_peak_bytes", rt.cgroup.memory_peak()),
         "tokens": orch.inference.total_tokens(),
         "wall_seconds": round(eng.wall_seconds, 2),
+        "pause_timeout_s": eng.pause_timeout_s,
+        "auto_stop_in_s": (round(max(0.0, eng.pause_timeout_s - (time.monotonic() - eng._paused_at)), 1)
+                           if eng.state.value == "PAUSE" and eng._paused_at is not None else None),
         "utilisation_pct": {k: round(v, 1) for k, v in eng.last_utilisation.items()},
         "runtime_type": rt.runtime_type,
         "sandbox_pid": rt.sandbox_pid,
@@ -151,3 +155,19 @@ async def get_session(session_id: str):
         "budget": rt.budget.to_dict(),
         "archived": False,
     }
+
+
+@router.post("/{session_id}/feature")
+async def feature_session(session_id: str, on: bool = True):
+    """Operator only: show (or hide) this recorded run as a public replay."""
+    from backend.api.public import featured, set_featured
+    if not session_id.isalnum() or (not session_manager.get(session_id) and read_entries(session_id) is None):
+        raise HTTPException(404, "session not found")
+    ids = set_featured(session_id, on)
+    return {"session_id": session_id, "featured": session_id in ids, "featured_sessions": ids}
+
+
+@router.get("/{session_id}/feature")
+async def feature_status(session_id: str):
+    from backend.api.public import featured
+    return {"session_id": session_id, "featured": session_id in featured()}

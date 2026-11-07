@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import evidence, governance, sessions, stream
+from backend.api import evidence, governance, public, sessions, stream
 from backend import security
 from backend.config import settings
 from backend.database import init_db
@@ -28,6 +28,7 @@ if _origins:  # default: same-origin only (dashboard is served by this app)
                        allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
 
 app.include_router(security.router)
+app.include_router(public.router)
 app.include_router(sessions.router)
 app.include_router(stream.router)
 app.include_router(governance.router)

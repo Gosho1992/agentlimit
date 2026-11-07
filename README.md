@@ -124,6 +124,16 @@ Cost is shown as an **estimate** from a price table (default: Vultr's published 
 
 ---
 
+## For visitors and judges: no access code needed
+
+Open the live URL. The home page explains AgentLimit in plain words and offers three ways in:
+
+- **Try it yourself:** pick one of the four preset situations and watch a real agent run live on the Vultr server, governed by AgentLimit. You can **freeze** it or **stop it for good** yourself. Guests can only run the server-side presets (never their own prompt): one guest run at a time, 3 per visitor per hour, on top of the global daily token cap. Switch this off with `GUEST_MODE_ENABLED=false`.
+- **Watch a recorded run:** real runs the operator published (`☆ Make public replay` in the console) can be replayed by anyone from their signed record, with the proof and the tamper test.
+- **How it works** and **Developers:** a one-page guide with a glossary, plus copy-paste `curl` / Python examples (`clients/agentlimit_client.py`, standard library only).
+
+The dashboard reads like a traffic light (green = all good, yellow = warning/advice, orange = slowed down, blue = frozen, red = stopped for good). Every term has a **?** explanation, a guided tour opens the first time, and **Technical details** shows the raw kernel, ledger and model fields. Public endpoints live under `/public/*` and only serve published replays or the caller's own guest run (scoped HMAC token); `tests/test_public.py` covers this.
+
 ## When the governor itself fails
 
 A governor that can die silently is not a governor. Three layers, each independent of the one above:
@@ -183,7 +193,7 @@ Its output is saved to `/var/lib/agentlimit/day1_gate.txt`. Claim only what pass
 
 ```bash
 pip install -r backend/requirements.txt
-python -m pytest backend/tests -q        # 148 pass anywhere; 3 kernel tests run on cgroup v2 as root
+python -m pytest backend/tests -q        # 154 pass anywhere; 3 kernel tests run on cgroup v2 as root
 cd frontend && npm install && npm run dev
 ```
 

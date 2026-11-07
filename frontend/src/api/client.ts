@@ -2,6 +2,49 @@ import type { EvidenceReport, SessionSnapshot, TamperResult, Termination } from 
 
 const API_BASE = "";
 
+// View mode: "operator" uses the logged-in /sessions API; "public" uses /public/sessions
+// (a published replay, or a guest run identified by its scoped guest token).
+let view: { public: boolean; guestToken?: string | null } = { public: false };
+export function setViewMode(v: { public: boolean; guestToken?: string | null }) { view = v; }
+export function isPublicView() { return view.public; }
+const sbase = (id: string) => (view.public ? `${API_BASE}/public/sessions/${id}` : `${API_BASE}/sessions/${id}`);
+const hdrs = (): Record<string, string> => (view.public && view.guestToken ? { "X-Guest-Token": view.guestToken } : {});
+const req = (url: string, init: RequestInit = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), ...hdrs() } });
+
+async function errText(r: Response): Promise<string> {
+  try {
+    const j = await r.json();
+    return typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+  } catch {
+    return `${r.status}`;
+  }
+}
+
+export interface PublicScenario { id: string; title: string; plain: string; expect: string; expect_color: string;
+  task: string; cpu: number; mem: number; tokens: number; wall: number }
+export async function getScenarios(): Promise<{ scenarios: PublicScenario[]; guest_mode: boolean }> {
+  return (await fetch(`${API_BASE}/public/scenarios`)).json();
+}
+export async function getReplays(): Promise<any[]> {
+  const r = await fetch(`${API_BASE}/public/replays`);
+  return r.ok ? r.json() : [];
+}
+export async function tryScenario(scenario: string): Promise<{ session_id: string; guest_token: string }> {
+  const r = await fetch(`${API_BASE}/public/try`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenario }) });
+  if (!r.ok) throw new Error(await errText(r));
+  return r.json();
+}
+export async function setFeatured(sessionId: string, on: boolean): Promise<{ featured: boolean }> {
+  const r = await fetch(`${API_BASE}/sessions/${sessionId}/feature?on=${on}`, { method: "POST" });
+  if (!r.ok) throw new Error(await errText(r));
+  return r.json();
+}
+export async function getFeatured(sessionId: string): Promise<{ featured: boolean }> {
+  const r = await fetch(`${API_BASE}/sessions/${sessionId}/feature`);
+  return r.ok ? r.json() : { featured: false };
+}
+
 export async function createSession(body: {
   task: string;
   cpu_budget_seconds?: number;
@@ -30,13 +73,13 @@ export async function createSession(body: {
 }
 
 export async function getSession(sessionId: string): Promise<SessionSnapshot> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}`);
+  const r = await req(sbase(sessionId));
   if (!r.ok) throw new Error(`getSession failed: ${r.status}`);
   return r.json();
 }
 
 export async function getEvidence(sessionId: string): Promise<EvidenceReport> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}/evidence`);
+  const r = await req(`${sbase(sessionId)}/evidence`);
   if (!r.ok) throw new Error(`getEvidence failed: ${r.status}`);
   return r.json();
 }
@@ -44,8 +87,8 @@ export async function getEvidence(sessionId: string): Promise<EvidenceReport> {
 export async function pauseSession(
   sessionId: string
 ): Promise<{ paused: boolean; state: string }> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}/pause`, { method: "POST" });
-  if (!r.ok) throw new Error(`pauseSession failed: ${r.status}`);
+  const r = await req(`${sbase(sessionId)}/pause`, { method: "POST" });
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
@@ -53,35 +96,36 @@ export async function resumeSession(
   sessionId: string,
   extraCpuSeconds = 0
 ): Promise<{ resumed: boolean; state: string; new_cpu_budget_usec: number }> {
-  const r = await fetch(
-    `${API_BASE}/sessions/${sessionId}/resume?extra_cpu_seconds=${extraCpuSeconds}`,
+  const r = await req(
+    view.public ? `${sbase(sessionId)}/resume` : `${sbase(sessionId)}/resume?extra_cpu_seconds=${extraCpuSeconds}`,
     { method: "POST" }
   );
-  if (!r.ok) throw new Error(`resumeSession failed: ${r.status}`);
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
 export async function killSession(
   sessionId: string
 ): Promise<{ killed: boolean; verdict: Termination["verdict"]; checks: Record<string, boolean>; state: string; workload_gone: boolean }> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}/kill`, { method: "POST" });
-  if (!r.ok) throw new Error(`killSession failed: ${r.status}`);
+  const r = await req(`${sbase(sessionId)}/kill`, { method: "POST" });
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
 export async function getEvents(sessionId: string): Promise<any[]> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}/events`);
+  const r = await req(`${sbase(sessionId)}/events`);
   if (!r.ok) throw new Error(`getEvents failed: ${r.status}`);
   return r.json();
 }
 
 export async function tamperTest(sessionId: string): Promise<TamperResult> {
-  const r = await fetch(`${API_BASE}/sessions/${sessionId}/evidence/tamper-test`, { method: "POST" });
+  const r = await req(`${sbase(sessionId)}/evidence/tamper-test`, { method: "POST" });
   if (!r.ok) throw new Error(`tamperTest failed: ${r.status}`);
   return r.json();
 }
 
-export const exportUrl = (sessionId: string) => `${API_BASE}/sessions/${sessionId}/evidence/export`;
+export const exportUrl = (sessionId: string) =>
+  `${sbase(sessionId)}/evidence/export${view.public && view.guestToken ? `?g=${view.guestToken}` : ""}`;
 
 export async function authStatus(): Promise<{ authenticated: boolean; configured: boolean }> {
   const r = await fetch(`${API_BASE}/auth/status`);
