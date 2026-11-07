@@ -110,7 +110,7 @@ def _archived_snapshot(session_id: str):
         "cpu_usec": sample.get("cpu_usage_usec", 0), "memory_bytes": sample.get("memory_current_bytes", 0),
         "memory_peak_bytes": sample.get("memory_peak_bytes", 0), "tokens": inf.get("total_tokens", 0),
         "wall_seconds": sample.get("wall_seconds", 0), "utilisation_pct": sample.get("utilisation_pct", {}),
-        "runtime_type": rt_ev.get("runtime_type", ""), "sandbox_pid": attach.get("pid"),
+        "runtime_type": rt_ev.get("runtime_type", ""), "sandbox_pid": attach.get("root_pid", attach.get("pid")),
         "memory_telemetry_valid": sample.get("memory_telemetry_valid", False), "inference": inf,
         "containment": probe, "termination": sm["termination"],
         "lifecycle": sm["lifecycle"] or {"agent_status": sm["agent_status"], "interrupted": sm["interrupted"]},
