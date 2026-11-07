@@ -31,7 +31,7 @@ export default function ControlBar({ sessionId, access = OPERATOR, state, closed
     if (!killFailed) return null;            // stopping, or stopped and confirmed: nothing left to control
     return (
       <div id="tour-controls" className="controls">
-        <h4>The stop wasn't confirmed</h4>
+        <h3 className="sub-title">The stop wasn't confirmed</h3>
         <div className="control-bar">
           <button className="danger" disabled={busy} onClick={() => act(() => killSession(sessionId, access), stopResult)}>
             🔁 Retry stop for good
@@ -44,7 +44,7 @@ export default function ControlBar({ sessionId, access = OPERATOR, state, closed
   const paused = state === "PAUSE";
   return (
     <div id="tour-controls" className="controls">
-      <h4>You're in control</h4>
+      <h3 className="sub-title">You're in control</h3>
       <div className="control-bar">
         <button className="btn-freeze" disabled={busy || paused}
           onClick={() => act(() => pauseSession(sessionId, access), (r) =>

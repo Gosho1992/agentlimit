@@ -11,7 +11,7 @@ export default function Story({ entries, technical }: { entries: LedgerEntry[]; 
   const latest = rows[rows.length - 1];
   return (
     <div id="tour-story" className="story">
-      <h3>What's happening</h3>
+      <h2 className="card-title">What's happening</h2>
       {latest ? (
         <p className={`story-now sig-text-${latest.n.signal ?? "grey"}`}>{latest.n.text}</p>
       ) : (
