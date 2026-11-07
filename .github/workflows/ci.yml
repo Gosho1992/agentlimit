@@ -7,12 +7,16 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-24.04
+    env:   # the defaults live under /var/lib/agentlimit (root on the VM); CI runs unprivileged
+      LEDGER_DIR: /tmp/agentlimit/ledger
+      SIGNER_KEY_PATH: /tmp/agentlimit/keys/evidence.ed25519
+      USAGE_DB_PATH: /tmp/agentlimit/usage.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r backend/requirements.txt pytest pytest-asyncio
+      - run: pip install -r backend/requirements.txt
       - run: python -m pytest backend/tests -q   # kernel tests skip without root + cgroup v2
 
   frontend:
