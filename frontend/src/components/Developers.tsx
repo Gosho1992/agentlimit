@@ -43,7 +43,7 @@ function Code({ children }: { children: string }) {
   return (
     <div className="code">
       <button className="copy" onClick={() => navigator.clipboard?.writeText(children)}>Copy</button>
-      <pre>{children}</pre>
+      <pre tabIndex={0} aria-label="Code example">{children}</pre>
     </div>
   );
 }
@@ -59,9 +59,9 @@ export default function Developers({ go }: { go: (p: string) => void }) {
       </p>
 
       <div className="doc-grid">
-        <div className="doc-card"><h3>You set</h3><p>CPU seconds · memory MB · AI token budget · optional $ cap · max running time</p></div>
-        <div className="doc-card"><h3>AgentLimit does</h3><p>warn → advise → slow down (+ cheaper model) → freeze → stop for good, measured from outside</p></div>
-        <div className="doc-card"><h3>You get back</h3><p>the answer · the stop verdict with 6 checks · a per-area proof · a signed record you can verify offline</p></div>
+        <div className="doc-card"><h2 className="card-title">You set</h2><p>CPU seconds · memory MB · AI token budget · optional $ cap · max running time</p></div>
+        <div className="doc-card"><h2 className="card-title">AgentLimit does</h2><p>warn → advise → slow down (+ cheaper model) → freeze → stop for good, measured from outside</p></div>
+        <div className="doc-card"><h2 className="card-title">You get back</h2><p>the answer · the stop verdict with 6 checks · a per-area proof · a signed record you can verify offline</p></div>
       </div>
 
       <h2>1. From the command line</h2>

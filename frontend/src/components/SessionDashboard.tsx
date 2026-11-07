@@ -136,13 +136,13 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
 
       {state === "KILL" && !t && (
         <div className="killbox pending" role="status">
-          <h3>⏳ Stopping and verifying…</h3>
+          <h2 className="card-title">⏳ Stopping and verifying…</h2>
           <p className="small">Cutting AI access, ending the agent, destroying the sandbox. The six checks appear here when they are done.</p>
         </div>
       )}
       {t && (
         <div className={`killbox ${t.verdict === "KILL_CONFIRMED" ? "confirmed" : "failed"}`}>
-          <h3>{t.verdict === "KILL_CONFIRMED" ? "🛑 Stopped for good, and proven" : "✗ Stop could not be fully confirmed"}</h3>
+          <h2 className="card-title">{t.verdict === "KILL_CONFIRMED" ? "🛑 Stopped for good, and proven" : "✗ Stop could not be fully confirmed"}</h2>
           <p className="small">
             Why: {t.reason?.startsWith("hard_limit") ? `it hit its hard limit (${t.reason.split(":")[1]?.replace("_", " ")})` : t.reason?.includes("operator") ? "a human pressed Stop for good" : t.reason}.
             AgentLimit then checked six separate things:
@@ -160,7 +160,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
 
       <div className="grid">
         <div id="tour-meters" className="card">
-          <h3><Term k="Budget">Limits</Term> <span className="muted small">measured from outside the sandbox</span></h3>
+          <h2 className="card-title"><Term k="Budget">Limits</Term> <span className="muted small">measured from outside the sandbox</span></h2>
           {b && snap ? (
             <>
               <Meter name="Computer time" term="CPU time" used={snap.cpu_usec / 1e6} limit={b.cpu_budget_usec / 1e6}
@@ -205,7 +205,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
         </div>
 
         <div className="card">
-          <h3>🔒 <Term k="Sandbox">Sealed sandbox</Term></h3>
+          <h2 className="card-title">🔒 <Term k="Sandbox">Sealed sandbox</Term></h2>
           {c ? (
             <>
               <p className={c.passed ? "ok" : "fail"}>
@@ -229,7 +229,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
         </div>
 
         <div className="card">
-          <h3>💡 Advice from AgentLimit</h3>
+          <h2 className="card-title">💡 Advice from AgentLimit</h2>
           {(snap?.recommendations ?? []).length === 0 && <p className="muted">No problems spotted so far.</p>}
           {(snap?.recommendations ?? []).map((r, i) =>
             technical ? <RecommendationCard key={r.recommendation_id ?? i} rec={r} /> : (
@@ -248,7 +248,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
       </details>
 
       <div id="tour-proof" className="card">
-        <h3>🧾 The proof <span className="muted small">re-checked from the signed record</span></h3>
+        <h2 className="card-title">🧾 The proof <span className="muted small">re-checked from the signed record</span></h2>
         {!closed && <p className="muted">The full proof appears when the run ends.</p>}
         <EvidenceReport key={String(closed)} sessionId={sessionId} access={access} autoLoad={closed} technical={technical} />
       </div>

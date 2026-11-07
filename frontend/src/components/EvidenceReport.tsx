@@ -97,9 +97,9 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
         <div className="proof">
           {a?.correctness_detail && (
             <div className={`answer ${a.verdict === "VERIFIED" ? "good" : "bad"}`}>
-              <h4>Is the agent's answer right?</h4>
+              <h3 className="sub-title">Is the agent's answer right?</h3>
               <table className="answer-table">
-                <thead><tr><th></th><th>The agent said</th><th>AgentLimit re-calculated</th></tr></thead>
+                <thead><tr><th><span className="sr-only">Value</span></th><th>The agent said</th><th>AgentLimit re-calculated</th></tr></thead>
                 <tbody>
                   {Object.keys(a.correctness_detail.expected).map((k) => {
                     const ok = a.correctness_detail!.expected[k] === a.correctness_detail!.actual[k];
@@ -117,7 +117,7 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
               </p>
             </div>
           )}
-          <h4>Proof checklist</h4>
+          <h3 className="sub-title">Proof checklist</h3>
           <ul className="proof-list">
             {Object.entries(report.verification).map(([k, v]) => (
               <li key={k} className={VCLS[v] ?? ""}>
@@ -163,10 +163,10 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
       {technical && report && (
         <div className="evidence-grid">
           <div>
-            <h4>What the agent claimed vs what was verified</h4>
+            <h3 className="sub-title">What the agent claimed vs what was verified</h3>
             <table className="claims">
               <thead>
-                <tr><th></th><th>Agent's output</th><th>Independent recomputation</th></tr>
+                <tr><th><span className="sr-only">Field</span></th><th>Agent's output</th><th>Independent recomputation</th></tr>
               </thead>
               <tbody>
                 {a?.correctness_detail ? (
@@ -197,7 +197,7 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
           </div>
 
           <div>
-            <h4>Ledger</h4>
+            <h3 className="sub-title">Ledger</h3>
             <p>
               <strong>Hash chain + Ed25519 signatures:</strong>{" "}
               <span className={report.chain_valid ? "ok" : "fail"}>{report.chain_valid ? "VALID" : "INVALID"}</span>{" "}
@@ -217,7 +217,7 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
           </div>
 
           <div>
-            <h4>Verification by area (each re-derived from the signed ledger)</h4>
+            <h3 className="sub-title">Verification by area (each re-derived from the signed ledger)</h3>
             <table className="claims">
               <tbody>
                 {Object.entries(report.verification).map(([k, v]) => (
@@ -240,7 +240,7 @@ export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad 
           </div>
 
           <div>
-            <h4>Session</h4>
+            <h3 className="sub-title">Session</h3>
             <p className="small">
               final state <span className={`state-pill state-${report.final_state.toLowerCase()}`}>{report.final_state}</span> · agent{" "}
               {report.agent_status} · {report.steps_completed} steps · {report.inference.total_tokens.toLocaleString()} tokens ·
