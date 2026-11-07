@@ -27,7 +27,7 @@ class FakeCgroup:
     def is_populated(self): return self.populated
     def is_frozen(self): return self.frozen
     def set_cpu_quota(self, q, period=100_000): self.cpu_max_val = f"{q} {period}"
-    def set_memory_high(self, b): self.memory_high = b
+    def set_memory_high(self, b): self.memory_high = (int(b) // 4096) * 4096   # kernel stores whole pages
     def cpu_max(self): return self.cpu_max_val
     def freeze(self, timeout_s=2.0): self.frozen = True; return True
     def unfreeze(self): self.frozen = False; return True

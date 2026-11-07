@@ -96,7 +96,7 @@ async def test_memory_high_recommendation_applies(parts):
     _, _, _, _, budget = parts
     assert await ctrl.apply_recommendation({"action": "set_memory_high", "rule_id": "memory_pressure"})
     # memory.high is computed on the SAME boundary as the policy budget and sits below it
-    assert cg.memory_high == int(0.90 * budget.memory_limit_bytes) < budget.memory_limit_bytes
+    assert cg.memory_high == (int(0.90 * budget.memory_limit_bytes) // 4096) * 4096 < budget.memory_limit_bytes   # page-aligned, as the kernel stores it
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ from backend.config import settings
 from backend.orchestrator import model_registry
 
 from backend.evidence.ledger import EvidenceLedger
-from backend.governance.resource_policy import MEMORY_HIGH_FRACTION, THROTTLE_CPU_QUOTA_USEC
+from backend.governance.resource_policy import MEMORY_HIGH_FRACTION, THROTTLE_CPU_QUOTA_USEC, page_align
 from backend.sandbox.cgroup_controller import CgroupController, proc_starttime
 
 log = logging.getLogger("agentlimit.interventions")
@@ -124,8 +124,8 @@ class InterventionController:
             elif action == "set_memory_high":
                 # Same boundary as the policy: host-accounted VMM memory.
                 # memory.high (reclaim pressure) sits BELOW memory.max (= budget).
-                soft = (self.memory_plan or {}).get("memory_high_bytes") or \
-                    int(MEMORY_HIGH_FRACTION * self.budget.memory_limit_bytes)
+                soft = page_align((self.memory_plan or {}).get("memory_high_bytes") or
+                                  MEMORY_HIGH_FRACTION * self.budget.memory_limit_bytes)
                 self.cg.set_memory_high(soft)
                 detail["memory.high_bytes"] = soft
                 detail["memory_budget_bytes"] = self.budget.memory_limit_bytes
