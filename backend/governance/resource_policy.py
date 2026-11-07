@@ -21,6 +21,13 @@ MEMORY_HIGH_FRACTION = 0.90
 VMM_HEADROOM_FRACTION = 0.10
 
 
+PAGE = 4096   # the kernel stores memory.high / memory.max in whole pages (rounds DOWN)
+
+
+def page_align(n: int) -> int:
+    return (int(n) // PAGE) * PAGE
+
+
 def memory_plan(budget_bytes: int) -> dict:
     budget_mb = budget_bytes // (1024 * 1024)
     headroom_mb = max(settings.vmm_memory_headroom_mb, -(-budget_mb * 10 // 100))   # ceil(10 %)
@@ -32,7 +39,7 @@ def memory_plan(budget_bytes: int) -> dict:
         "boundary": "host-accounted microVM memory (guest RAM + VMM overhead)",
         "memory_budget_bytes": budget_bytes,
         "host_memory_max_bytes": budget_bytes,                       # hard ceiling (kernel OOM)
-        "memory_high_bytes": int(MEMORY_HIGH_FRACTION * budget_bytes),  # soft reclaim pressure
+        "memory_high_bytes": page_align(MEMORY_HIGH_FRACTION * budget_bytes),  # soft reclaim pressure
         "recommend_threshold_bytes": int(MEMORY_RECOMMEND_FRACTION * budget_bytes),
         "guest_ram_mb": guest_mb,
         "vmm_headroom_mb": headroom_mb,

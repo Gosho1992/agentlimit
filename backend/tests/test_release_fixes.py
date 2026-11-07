@@ -160,3 +160,17 @@ async def test_security_headers_on_every_response(app_env):
             assert "frame-ancestors 'none'" in h["content-security-policy"], path
             assert h["referrer-policy"] == "no-referrer", path
             assert "max-age=" in h["strict-transport-security"], path
+
+
+@pytest.mark.asyncio
+async def test_memory_high_is_page_aligned_so_kernel_readback_verifies(tmp_path):
+    """Live run 10e741415bdf42f3: wrote 1449551462, kernel read back 1449549824 (page-rounded) -> verified=false."""
+    from backend.governance.resource_policy import memory_plan
+    from backend.tests.test_engine import make
+    eng, orch, cg, ledger, *_ = make(tmp_path)
+    eng.interventions.memory_plan = memory_plan(1536 * 2**20)
+    assert eng.interventions.memory_plan["memory_high_bytes"] % 4096 == 0
+    assert await eng.interventions.apply_recommendation({"action": "set_memory_high", "rule_id": "memory_pressure"})
+    p = [e for e in ledger.read_all() if e["event_type"] == "recommendation_applied"][-1]["payload"]
+    assert p["memory.high_bytes"] % 4096 == 0
+    assert p["memory.high_readback"] == str(p["memory.high_bytes"]) and p["verified"] is True
