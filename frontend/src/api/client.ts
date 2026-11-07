@@ -2,14 +2,15 @@ import type { EvidenceReport, SessionSnapshot, TamperResult, Termination } from 
 
 const API_BASE = "";
 
-// View mode: "operator" uses the logged-in /sessions API; "public" uses /public/sessions
-// (a published replay, or a guest run identified by its scoped guest token).
-let view: { public: boolean; guestToken?: string | null } = { public: false };
-export function setViewMode(v: { public: boolean; guestToken?: string | null }) { view = v; }
-export function isPublicView() { return view.public; }
-const sbase = (id: string) => (view.public ? `${API_BASE}/public/sessions/${id}` : `${API_BASE}/sessions/${id}`);
-const hdrs = (): Record<string, string> => (view.public && view.guestToken ? { "X-Guest-Token": view.guestToken } : {});
-const req = (url: string, init: RequestInit = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), ...hdrs() } });
+// Who is asking, passed explicitly to every session call (no global state):
+// operator = the logged-in /sessions API; public = /public/sessions (a published
+// replay, or a guest run identified by its scoped guest token).
+export interface Access { public: boolean; guestToken?: string | null }
+export const OPERATOR: Access = { public: false };
+const sbase = (id: string, a: Access) => (a.public ? `${API_BASE}/public/sessions/${id}` : `${API_BASE}/sessions/${id}`);
+const hdrs = (a: Access): Record<string, string> => (a.public && a.guestToken ? { "X-Guest-Token": a.guestToken } : {});
+const req = (a: Access, url: string, init: RequestInit = {}) =>
+  fetch(url, { ...init, headers: { ...(init.headers || {}), ...hdrs(a) } });
 
 async function errText(r: Response): Promise<string> {
   try {
@@ -23,11 +24,14 @@ async function errText(r: Response): Promise<string> {
 export interface PublicScenario { id: string; title: string; plain: string; expect: string; expect_color: string;
   task: string; cpu: number; mem: number; tokens: number; wall: number }
 export async function getScenarios(): Promise<{ scenarios: PublicScenario[]; guest_mode: boolean }> {
-  return (await fetch(`${API_BASE}/public/scenarios`)).json();
+  const r = await fetch(`${API_BASE}/public/scenarios`);
+  if (!r.ok) throw new Error(await errText(r));
+  return r.json();
 }
 export async function getReplays(): Promise<any[]> {
   const r = await fetch(`${API_BASE}/public/replays`);
-  return r.ok ? r.json() : [];
+  if (!r.ok) throw new Error(await errText(r));      // a failed request is not "no recordings"
+  return r.json();
 }
 export async function tryScenario(scenario: string): Promise<{ session_id: string; guest_token: string }> {
   const r = await fetch(`${API_BASE}/public/try`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -72,32 +76,33 @@ export async function createSession(body: {
   return r.json();
 }
 
-export async function getSession(sessionId: string): Promise<SessionSnapshot> {
-  const r = await req(sbase(sessionId));
-  if (!r.ok) throw new Error(`getSession failed: ${r.status}`);
+export async function getSession(sessionId: string, a: Access = OPERATOR): Promise<SessionSnapshot> {
+  const r = await req(a, sbase(sessionId, a));
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
-export async function getEvidence(sessionId: string): Promise<EvidenceReport> {
-  const r = await req(`${sbase(sessionId)}/evidence`);
-  if (!r.ok) throw new Error(`getEvidence failed: ${r.status}`);
+export async function getEvidence(sessionId: string, a: Access = OPERATOR): Promise<EvidenceReport> {
+  const r = await req(a, `${sbase(sessionId, a)}/evidence`);
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
 export async function pauseSession(
-  sessionId: string
-): Promise<{ paused: boolean; state: string }> {
-  const r = await req(`${sbase(sessionId)}/pause`, { method: "POST" });
+  sessionId: string, a: Access = OPERATOR
+): Promise<{ paused: boolean; state: string; mode?: string; verified_frozen?: boolean }> {
+  const r = await req(a, `${sbase(sessionId, a)}/pause`, { method: "POST" });
   if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
 export async function resumeSession(
   sessionId: string,
-  extraCpuSeconds = 0
-): Promise<{ resumed: boolean; state: string; new_cpu_budget_usec: number }> {
-  const r = await req(
-    view.public ? `${sbase(sessionId)}/resume` : `${sbase(sessionId)}/resume?extra_cpu_seconds=${extraCpuSeconds}`,
+  extraCpuSeconds = 0,
+  a: Access = OPERATOR
+): Promise<{ resumed: boolean; state: string; new_cpu_budget_usec?: number; reason?: string }> {
+  const r = await req(a,
+    a.public ? `${sbase(sessionId, a)}/resume` : `${sbase(sessionId, a)}/resume?extra_cpu_seconds=${extraCpuSeconds}`,
     { method: "POST" }
   );
   if (!r.ok) throw new Error(await errText(r));
@@ -105,27 +110,27 @@ export async function resumeSession(
 }
 
 export async function killSession(
-  sessionId: string
+  sessionId: string, a: Access = OPERATOR
 ): Promise<{ killed: boolean; verdict: Termination["verdict"]; checks: Record<string, boolean>; state: string; workload_gone: boolean }> {
-  const r = await req(`${sbase(sessionId)}/kill`, { method: "POST" });
+  const r = await req(a, `${sbase(sessionId, a)}/kill`, { method: "POST" });
   if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
-export async function getEvents(sessionId: string): Promise<any[]> {
-  const r = await req(`${sbase(sessionId)}/events`);
+export async function getEvents(sessionId: string, a: Access = OPERATOR): Promise<any[]> {
+  const r = await req(a, `${sbase(sessionId, a)}/events`);
   if (!r.ok) throw new Error(`getEvents failed: ${r.status}`);
   return r.json();
 }
 
-export async function tamperTest(sessionId: string): Promise<TamperResult> {
-  const r = await req(`${sbase(sessionId)}/evidence/tamper-test`, { method: "POST" });
-  if (!r.ok) throw new Error(`tamperTest failed: ${r.status}`);
+export async function tamperTest(sessionId: string, a: Access = OPERATOR): Promise<TamperResult> {
+  const r = await req(a, `${sbase(sessionId, a)}/evidence/tamper-test`, { method: "POST" });
+  if (!r.ok) throw new Error(await errText(r));
   return r.json();
 }
 
-export const exportUrl = (sessionId: string) =>
-  `${sbase(sessionId)}/evidence/export${view.public && view.guestToken ? `?g=${view.guestToken}` : ""}`;
+export const exportUrl = (sessionId: string, a: Access = OPERATOR) =>
+  `${sbase(sessionId, a)}/evidence/export${a.public && a.guestToken ? `?g=${a.guestToken}` : ""}`;
 
 export async function authStatus(): Promise<{ authenticated: boolean; configured: boolean }> {
   const r = await fetch(`${API_BASE}/auth/status`);

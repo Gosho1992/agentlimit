@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const STEPS = [
   { id: "tour-status", title: "1. The traffic light", text: "One colour tells you everything. Green = all good, yellow = warning, orange = slowed down, blue = frozen, red = stopped for good." },
@@ -18,6 +18,7 @@ export function tourSeen(): boolean {
 
 export default function Tour({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [i, setI] = useState(0);
+  const card = useRef<HTMLDivElement>(null);
   const steps = STEPS.filter((s) => document.getElementById(s.id));
   const step = steps[Math.min(i, steps.length - 1)];
 
@@ -30,20 +31,28 @@ export default function Tour({ open, onClose }: { open: boolean; onClose: () => 
     return () => el?.classList.remove("tour-focus");
   }, [open, step?.id]);
 
+  useEffect(() => {
+    if (!open) return;
+    card.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   if (!open || !step) return null;
-  const close = () => {
+  function close() {
     try { localStorage.setItem(KEY, "1"); } catch { /* storage unavailable */ }
     onClose();
-  };
+  }
   const last = i >= steps.length - 1;
   return (
-    <div className="tour-card" role="dialog" aria-label="Guided tour">
+    <div className="tour-card" role="dialog" aria-label="Guided tour" aria-live="polite" tabIndex={-1} ref={card}>
       <div className="tour-count">{Math.min(i, steps.length - 1) + 1} / {steps.length}</div>
       <h4>{step.title}</h4>
       <p>{step.text}</p>
       <div>
         <button onClick={() => (last ? close() : setI(i + 1))}>{last ? "Got it" : "Next →"}</button>
-        {!last && <button className="btn-ghost" onClick={close}>Skip</button>}
+        {!last && <button className="btn-ghost" onClick={close}>Skip (Esc)</button>}
       </div>
     </div>
   );

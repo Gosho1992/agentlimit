@@ -15,7 +15,7 @@ TIMELINE_EVENTS = {
     "agent_stopped", "agent_budget_exceeded", "agent_cancelled", "memory_telemetry_validated",
     "session_closed", "governance_tick_error", "pause_timeout_escalation", "session_interrupted",
     "runtime_stop_error", "inference_call", "empty_generation", "session_start_failed",
-    "sandbox_attach_failed", "watchdog_kill", "recommendation_delivery_failed",
+    "sandbox_attach_failed", "watchdog_kill", "recommendation_delivery_failed", "kill_retry", "guest_session",
 }
 
 
@@ -66,6 +66,8 @@ async def kill(session_id: str):
     result = rt.engine.termination
     if not result:
         result = await rt.engine.kill_now("operator_kill")
+    elif result.get("verdict") != "KILL_CONFIRMED" and not rt.closed:
+        result = await rt.engine.retry_kill()          # a failed stop can be retried, never undone
     confirmed = result.get("verdict") == "KILL_CONFIRMED"
     return {
         "killed": confirmed,

@@ -14,7 +14,7 @@ export const STATES: Record<GovernanceState, StateInfo> = {
   RECOMMEND: { signal: "yellow", icon: "💡", label: "Advice given", tech: "RECOMMEND",
     say: "AgentLimit spotted a problem and suggested (or applied) a fix." },
   THROTTLE: { signal: "orange", icon: "🐢", label: "Slowed down", tech: "THROTTLE",
-    say: "AgentLimit turned down the agent's computer speed and switched it to a cheaper AI model." },
+    say: "AgentLimit turns down the agent's computer speed and, when one is available, switches it to a cheaper AI model." },
   PAUSE: { signal: "blue", icon: "🧊", label: "Frozen", tech: "PAUSE",
     say: "Everything is frozen in place: no code runs and no AI calls are made until a human decides." },
   KILL: { signal: "red", icon: "🛑", label: "Stopped for good", tech: "KILL",
@@ -24,16 +24,33 @@ export const STATES: Record<GovernanceState, StateInfo> = {
 
 export const LADDER: GovernanceState[] = ["NORMAL", "ALERT", "RECOMMEND", "THROTTLE", "PAUSE", "KILL"];
 
-/** Overall signal for a session, including how it ended. */
-export function overall(snap: any): StateInfo {
-  const state = (snap?.state ?? "NORMAL") as GovernanceState;
-  const closed = !!snap?.lifecycle || !!snap?.archived;
+const lastOf = (entries: LedgerEntry[], t: string) => {
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].event_type === t) return entries[i].payload || {};
+  return null;
+};
+
+/** Overall signal for a session. Never more confident than the signed evidence:
+ *  KILL is "stopped" only with a confirmed verdict; THROTTLE and PAUSE say only what was verified. */
+export function overall(snap: any, entries: LedgerEntry[] = []): StateInfo {
   if (!snap) return { signal: "grey", icon: "⏳", label: "Starting…", tech: "", say: "Starting a fresh, sealed sandbox for the agent." };
-  if (state === "KILL") return STATES.KILL;
+  const state = (snap.state ?? "NORMAL") as GovernanceState;
+  const closed = !!snap.lifecycle || !!snap.archived;
+  if (state === "KILL") {
+    const t = snap.termination;
+    if (!t) return { signal: "red", icon: "⏳", label: "Stopping…", tech: "KILL · VERIFYING",
+      say: "AgentLimit is cutting AI access, ending the agent and destroying its sandbox. It will now check that nothing is left." };
+    if (t.verdict === "KILL_CONFIRMED") return STATES.KILL;
+    const lc = snap.lifecycle;
+    if (lc && lc.workload_gone && lc.sandbox_removed)
+      return { signal: "yellow", icon: "⚠️", label: "Stopped, with a warning", tech: "KILL_FAILED → CLEANED",
+        say: "The stop missed one of its six checks (shown below). AgentLimit's final clean-up then confirmed the sandbox is gone and deleted." };
+    return { signal: "yellow", icon: "⚠️", label: "Stop not confirmed", tech: "KILL_FAILED",
+      say: "AgentLimit tried to stop the agent but could not confirm every check. See which check failed below. It needs attention." };
+  }
   if (closed) {
     if (snap.agent_status === "completed")
-      return { signal: "green", icon: "🎉", label: "Finished", tech: "COMPLETED",
-        say: "The agent finished its job inside its limits. Scroll down to see its answer checked independently." };
+      return { signal: "green", icon: "🏁", label: "Finished", tech: "COMPLETED",
+        say: "The agent finished inside its limits. The proof below shows exactly what was checked." };
     if (String(snap.agent_status).startsWith("stopped"))
       return { signal: "yellow", icon: "✋", label: "Stopped early", tech: "STOPPED",
         say: "AgentLimit stopped the agent before it wasted more time and money (for example, retrying the same broken thing)." };
@@ -42,6 +59,23 @@ export function overall(snap: any): StateInfo {
   }
   if (snap.agent_status === "pending") return { signal: "grey", icon: "⏳", label: "Starting…", tech: "STARTING",
     say: "Starting a fresh, sealed sandbox for the agent." };
+  if (state === "THROTTLE") {
+    const p = lastOf(entries, "throttle_applied");
+    if (!p) return { ...STATES.THROTTLE, say: "AgentLimit is slowing the agent down…" };
+    const down = p.model_downgrade && typeof p.model_downgrade === "object";
+    if (p.verified === false)
+      return { ...STATES.THROTTLE, label: "Slow-down not confirmed", say: "AgentLimit asked the kernel to slow the sandbox down, but the kernel did not confirm it. Recorded, not hidden." };
+    return { ...STATES.THROTTLE, say: down
+      ? `AgentLimit halved the sandbox's computer speed (kernel confirmed) and switched the agent's next AI calls to the cheaper model ${p.model_downgrade.to}.`
+      : "AgentLimit halved the sandbox's computer speed (kernel confirmed). A cheaper AI model isn't available on this server, so the model stays the same." };
+  }
+  if (state === "PAUSE") {
+    const p = lastOf(entries, "pause_applied");
+    if (!p) return { ...STATES.PAUSE, label: "Freezing…", say: "AgentLimit is freezing the sandbox…" };
+    if (p.mode === "KERNEL_FREEZE" && p.verified_frozen)
+      return { ...STATES.PAUSE, label: "Frozen", say: "Everything is frozen in place (the kernel confirms it): no code runs and no AI calls are made until a human decides." };
+    return { ...STATES.PAUSE, label: "Paused", say: "The agent is held before its next step: no new AI calls or code runs. A kernel freeze wasn't available, so code already running may finish its current step." };
+  }
   return STATES[state] ?? STATES.NORMAL;
 }
 
@@ -131,15 +165,21 @@ export function narrate(e: LedgerEntry): { text: string; signal?: Signal } | nul
       const why = human ? " (a human pressed the button)" : p.utilisation_pct
         ? ` (${Object.entries(p.utilisation_pct as Record<string, number>).sort((a, b) => b[1] - a[1])
             .slice(0, 1).map(([k, v]) => `${plainMetric(k)} at ${v}%`).join("")})` : "";
+      if (p.to === "KILL") return { text: `Decided to stop it for good${why}. Stopping and checking…`, signal: "red" };
       return { text: `${st.icon} ${st.label}${why}.`, signal: st.signal };
     }
     case "recommendation_issued": return { text: `💡 Advice: ${plainRule(p.rule_id)}`, signal: "yellow" };
     case "recommendation_applied": return p.applied
-      ? { text: `AgentLimit applied the fix itself${p.verified === false ? " (but could not confirm it worked)" : " and confirmed it worked"}.`, signal: "yellow" }
+      ? { text: p.verified === true ? "AgentLimit applied the fix itself and confirmed it took effect."
+          : "AgentLimit applied the fix itself (not independently confirmed).", signal: "yellow" }
       : p.action === "notify_operator" ? { text: "This one needs a human decision; AgentLimit didn't act on its own." } : null;
     case "recommendation_delivery_failed": return { text: "Advice could not be delivered to the agent (recorded, not hidden).", signal: "yellow" };
-    case "throttle_applied": return { text: `🐢 Slowed the sandbox to half speed${typeof p.model_downgrade === "object" ? ` and switched AI model ${p.model_downgrade.from} → ${p.model_downgrade.to}` : ""}.`, signal: "orange" };
-    case "pause_applied": return { text: p.verified_frozen ? "🧊 Frozen: the kernel confirms nothing inside the sandbox can run." : "🧊 Paused at the next step.", signal: "blue" };
+    case "throttle_applied": return p.verified === false
+      ? { text: "Tried to slow the sandbox down, but the kernel did NOT confirm it.", signal: "orange" }
+      : { text: `🐢 Sandbox slowed to half speed (kernel confirmed)${p.model_downgrade && typeof p.model_downgrade === "object" ? `; next AI calls use the cheaper ${p.model_downgrade.to}` : "; no cheaper model available"}.`, signal: "orange" };
+    case "pause_applied": return { text: p.mode === "KERNEL_FREEZE" && p.verified_frozen
+      ? "🧊 Frozen: the kernel confirms nothing inside the sandbox can run."
+      : "⏸️ Paused before the next step (kernel freeze not available).", signal: "blue" };
     case "pause_timeout_escalation": return { text: `Nobody decided within ${Math.round(p.timeout_s)} s, so AgentLimit stopped it for good.`, signal: "red" };
     case "manual_pause": return { text: "A human pressed Freeze.", signal: "blue" };
     case "resume_applied": return { text: "▶️ Unfrozen, the agent continues.", signal: "green" };
@@ -148,7 +188,8 @@ export function narrate(e: LedgerEntry): { text: string; signal?: Signal } | nul
     case "watchdog_kill": return { text: "🚨 AgentLimit's backup watchdog stopped the sandbox because the main controller froze.", signal: "red" };
     case "kill_requested": return { text: "Stopping: cutting AI access, ending the agent, destroying the sandbox…", signal: "red" };
     case "kill_verified": return { text: "🛑 Confirmed stopped: all 6 checks passed. Nothing is left running.", signal: "red" };
-    case "kill_failed": return { text: "Stop could NOT be fully confirmed; see the checks below.", signal: "red" };
+    case "kill_failed": return { text: "⚠️ Stop could NOT be fully confirmed; see the checks below.", signal: "yellow" };
+    case "kill_retry": return { text: "A human asked AgentLimit to try the stop again.", signal: "red" };
     case "agent_stopped": return { text: `✋ The agent was stopped${p.stopped_by === "governor" ? " by AgentLimit" : ""}: ${plainReason(p.reason)}`, signal: "yellow" };
     case "agent_budget_exceeded": return { text: "An AI call was refused because it would go over the budget.", signal: "orange" };
     case "agent_completed": return { text: "🎉 The agent finished and handed in its answer.", signal: "green" };

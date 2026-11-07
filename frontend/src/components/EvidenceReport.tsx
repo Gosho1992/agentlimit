@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { exportUrl, getEvidence, tamperTest } from "../api/client";
+import { exportUrl, getEvidence, OPERATOR, tamperTest, type Access } from "../api/client";
 import type { EvidenceReport as Report, TamperResult } from "../types";
 import { PUBLISHED_FINGERPRINT, VERDICT_PLAIN, VERIFY_PLAIN } from "../plain";
 import Term from "./Term";
@@ -20,7 +20,9 @@ const AREA: Record<string, string> = {
 const VCLS: Record<string, string> = { VALID: "ok", FAILED: "fail", PARTIAL: "warn", PENDING: "muted", NOT_APPLICABLE: "muted",
   COMPLETE: "ok", IN_PROGRESS: "muted", INTERRUPTED: "warn", INCOMPLETE: "fail" };
 
-export default function EvidenceReport({ sessionId, autoLoad = false, technical = false }: { sessionId: string; autoLoad?: boolean; technical?: boolean }) {
+export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad = false, technical = false }: { sessionId: string; access?: Access; autoLoad?: boolean; technical?: boolean }) {
+  const [error, setError] = useState<string | null>(null);
+  const [tamperBusy, setTamperBusy] = useState(false);
   const [report, setReport] = useState<Report | null>(null);
   const [tamper, setTamper] = useState<TamperResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,7 +30,10 @@ export default function EvidenceReport({ sessionId, autoLoad = false, technical 
   async function load() {
     setLoading(true);
     try {
-      setReport(await getEvidence(sessionId));
+      setError(null);
+      setReport(await getEvidence(sessionId, access));
+    } catch (e: any) {
+      setError(`Couldn't load the proof: ${e.message}. This is a connection problem, not a verdict.`);
     } finally {
       setLoading(false);
     }
@@ -46,11 +51,17 @@ export default function EvidenceReport({ sessionId, autoLoad = false, technical 
     <div className="evidence">
       <div className="evidence-actions">
         <button onClick={load} disabled={loading}>{loading ? "Checking…" : report ? "Check again" : "Check the proof"}</button>
-        <button id="tour-tamper" className="btn-cheat" onClick={async () => setTamper(await tamperTest(sessionId))}>
-          🕵️ Try to cheat (tamper test)
+        <button id="tour-tamper" className="btn-cheat" disabled={tamperBusy} onClick={async () => {
+          setTamperBusy(true); setError(null);
+          try { setTamper(await tamperTest(sessionId, access)); }
+          catch (e: any) { setError(`The tamper test didn't run: ${e.message}. Try again.`); }
+          finally { setTamperBusy(false); }
+        }}>
+          {tamperBusy ? "Tampering with a copy…" : "🕵️ Try to cheat (tamper test)"}
         </button>
-        <a className="button" href={exportUrl(sessionId)}>⬇ Download the signed record</a>
+        <a className="button" href={exportUrl(sessionId, access)}>⬇ Download the signed record</a>
       </div>
+      {error && <p className="error" role="alert">{error} <button className="btn-ghost" onClick={load}>Retry</button></p>}
 
       {tamper && (
         <div className="cheat">

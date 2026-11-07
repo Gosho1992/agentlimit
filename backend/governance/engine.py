@@ -154,6 +154,16 @@ class GovernanceEngine:
         self.stop_event.set()
         return self.termination or {}
 
+    async def retry_kill(self, reason: str = "operator_retry_kill") -> dict:
+        """Run the full kill + verification again after a KILL_FAILED verdict.
+        A confirmed kill is final; this never resumes anything."""
+        async with self.transition_lock:
+            t = self.termination
+            if self.state != State.KILL or (t and t.get("verdict") == "KILL_CONFIRMED"):
+                return t or {}
+            self.ledger.append("kill_retry", {"by": "operator", "previous_checks": (t or {}).get("checks")})
+            return await self.interventions.kill(reason)
+
     async def resume(self, extra_cpu_usec: int = 0) -> dict:
         """Operator resume: unfreeze, optionally extend the CPU budget, then
         de-escalate to the state the CURRENT metrics justify (capped below PAUSE).
