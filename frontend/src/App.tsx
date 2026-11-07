@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authStatus } from "./api/client";
+import { authStatus, getReplays } from "./api/client";
 import Developers from "./components/Developers";
 import Guide from "./components/Guide";
 import Landing from "./components/Landing";
@@ -26,13 +26,19 @@ function parse(): Route {
   const q = new URLSearchParams(window.location.search);
   if (q.get("run")) return { page: "run", run: q.get("run") };
   if (q.get("session")) return { page: "console", session: q.get("session") };
-  return { page: q.get("page") || "home" };
+  const page = q.get("page") || "home";
+  return { page: KNOWN_PAGES.includes(page) ? page : "home" };   // unknown ?page= falls back to home
 }
+
+const KNOWN_PAGES = ["home", "guide", "developers", "console"];
 
 export default function App() {
   const [route, setRoute] = useState<Route>(parse);
   const [auth, setAuth] = useState<{ authenticated: boolean; configured: boolean } | null>(null);
   const [memToken, setMemToken] = useState<Record<string, string>>({});
+
+  const [hasReplays, setHasReplays] = useState(false);
+  useEffect(() => { getReplays().then((r) => setHasReplays(r.length > 0)).catch(() => setHasReplays(false)); }, [route.page]);
 
   const refresh = () => authStatus().then(setAuth).catch(() => setAuth({ authenticated: false, configured: false }));
   useEffect(() => { refresh(); }, []);
@@ -79,13 +85,14 @@ export default function App() {
         </a>
         <nav>
           <a href="/#try" onClick={(e) => { e.preventDefault(); go("home#try"); }}>Try it</a>
-          <a href="/#replays" onClick={(e) => { e.preventDefault(); go("home#replays"); }}>Replays</a>
+          {hasReplays && <a href="/#replays" onClick={(e) => { e.preventDefault(); go("home#replays"); }}>Replays</a>}
           {link("guide", "How it works")}
           {link("developers", "Developers")}
           {link("console", auth?.authenticated ? "Console" : "Operator login")}
         </nav>
       </header>
 
+      <main id="main">
       {route.page === "home" && <Landing go={go} openRun={openRun} />}
       {route.page === "guide" && <Guide go={go} />}
       {route.page === "developers" && <Developers go={go} />}
@@ -101,6 +108,8 @@ export default function App() {
       ) : (
         <NewSessionForm onCreated={(id) => nav({ page: "console", session: id })} />
       ))}
+
+      </main>
 
       <footer className="foot">
         AgentLimit · external runtime governor for AI agents on Vultr ·{" "}

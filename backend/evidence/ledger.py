@@ -8,6 +8,14 @@ from typing import Any
 from backend.evidence.signer import Signer
 
 
+# A ledger is sealed once one of these is written; nothing may follow it.
+TERMINAL_EVENT_TYPES = ("session_closed", "session_start_failed", "session_interrupted")
+
+
+class LedgerSealedError(RuntimeError):
+    """Raised on any append after the ledger's terminal event."""
+
+
 class EvidenceLedger:
     """
     Append-only, hash-chained, signed event log for one session.
@@ -19,29 +27,37 @@ class EvidenceLedger:
         self.signer = signer
         self.path = Path(base_dir) / f"{session_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._prev_hash = self._load_prev_hash()
+        self._prev_hash, self._last_type = self._load_tail()
         # the out-of-loop watchdog thread may append concurrently with the event loop
         self._lock = threading.Lock()
 
-    def _load_prev_hash(self) -> str:
+    def _load_tail(self) -> tuple[str, str | None]:
         if not self.path.exists():
-            return "0" * 64
+            return "0" * 64, None
         last = ""
         for line in self.path.read_text().splitlines():
             if line.strip():
                 last = line
         if not last:
-            return "0" * 64
+            return "0" * 64, None
         try:
-            return json.loads(last).get("entry_hash", "0" * 64)
+            e = json.loads(last)
+            return e.get("entry_hash", "0" * 64), e.get("event_type")
         except Exception:
-            return "0" * 64
+            return "0" * 64, None
+
+    @property
+    def sealed(self) -> bool:
+        return self._last_type in TERMINAL_EVENT_TYPES
 
     def append(self, event_type: str, payload: dict[str, Any]) -> dict:
         with self._lock:
             return self._append_locked(event_type, payload)
 
     def _append_locked(self, event_type: str, payload: dict[str, Any]) -> dict:
+        if self.sealed:
+            raise LedgerSealedError(f"ledger {self.session_id} is sealed by {self._last_type}; "
+                                    f"refusing to append {event_type!r}")
         event = {
             "event_type": event_type,
             "session_id": self.session_id,
@@ -56,6 +72,7 @@ class EvidenceLedger:
             f.write(json.dumps(event, separators=(",", ":")) + "\n")
             f.flush()
         self._prev_hash = event["entry_hash"]
+        self._last_type = event_type
         return event
 
     def read_all(self) -> list[dict]:
@@ -94,7 +111,7 @@ def verify_entries(entries: list[dict], public_key_b64: str) -> tuple[bool, str]
 # the END (a prefix of a valid chain is still a valid chain). Completeness closes
 # that gap: a finished session must end with its signed terminal event, which
 # only the signing key can produce. Anything else is reported, never VALID.
-TERMINAL_EVENTS = ("session_closed", "session_start_failed")
+TERMINAL_EVENTS = ("session_closed", "session_start_failed")   # COMPLETE; session_interrupted = INTERRUPTED
 
 
 def ledger_completeness(entries: list[dict], live: bool = False) -> tuple[str, str]:

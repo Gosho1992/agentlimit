@@ -22,6 +22,7 @@ app = FastAPI(title="AgentLimit", version="1.5.0", debug=False,
               description="External runtime governor for autonomous AI agents on Vultr.", **_docs)
 
 app.add_middleware(security.AuthMiddleware)
+app.add_middleware(security.SecurityHeadersMiddleware)   # outermost: also on 401/503
 _origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 if _origins:  # default: same-origin only (dashboard is served by this app)
     app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_credentials=True,

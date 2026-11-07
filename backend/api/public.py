@@ -92,8 +92,9 @@ def _require_view(session_id: str, token: str | None) -> None:
 def _require_guest_live(session_id: str, token: str | None) -> None:
     if not _is_guest(session_id, token):
         raise HTTPException(403, "you can only control a run you started")
-    if not session_manager.get(session_id):
-        raise HTTPException(409, "this run has already finished")
+    rt = session_manager.get(session_id)
+    if not rt or rt.closed:
+        raise HTTPException(409, "Run already closed")
 
 
 # ------------------------------------------------------------------ routes

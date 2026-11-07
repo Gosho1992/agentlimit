@@ -152,7 +152,9 @@ async def test_successful_run_records_artifact(tmp_path):
     out = await orch.run()
     assert out and out["stdout_sha256"]
     done = [e for e in ledger.read_all() if e["event_type"] == "agent_completed"][0]["payload"]
-    assert open(done["artifact_path"]).read() == '{"a": 1}\n'
+    assert "artifact_path" not in done                       # no absolute host path in the signed record
+    assert done["artifact_relative_path"].startswith("artifacts/")
+    assert (tmp_path / "art" / done["artifact_relative_path"].split("/", 1)[1]).read_text() == '{"a": 1}\n'
 
 
 @pytest.mark.asyncio

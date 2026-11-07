@@ -5,7 +5,7 @@ import Term from "./Term";
 
 const TITLES: Record<string, string> = {
   reconcile: "Useful work, checked", runaway: "Out-of-control agent, stopped",
-  retry: "Agent stuck in a loop", memory: "Agent eating memory",
+  retry: "Agent stuck in a loop", memory: "Agent filling its memory",
 };
 
 // Badge = how the run ended. Claims about correctness come only from r.highlights (server-derived from signed evidence).
@@ -89,6 +89,7 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
         </div>
       </section>
 
+      <h2 className="why-title">Why agents need a referee</h2>
       <section className="why">
         <div className="why-card"><span>🔁</span><h3>Loops cost money</h3>
           <p>An agent that retries the same broken step 200 times pays for 200 AI calls.</p></div>
@@ -190,7 +191,7 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
       <section className="compare">
         <h2>Without vs. with AgentLimit</h2>
         <div className="table-scroll"><table className="compare-table">
-          <thead><tr><th></th><th>A normal agent setup</th><th>With AgentLimit</th></tr></thead>
+          <thead><tr><th><span className="sr-only">Question</span></th><th>A normal agent setup</th><th>With AgentLimit</th></tr></thead>
           <tbody>
             <tr><td>Who decides when to stop?</td><td>The agent itself</td><td>✓ An outside referee that can force a stop</td></tr>
             <tr><td>Who measures usage?</td><td>The agent reports it</td><td>✓ Measured from outside, can't be faked</td></tr>

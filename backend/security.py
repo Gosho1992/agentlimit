@@ -115,3 +115,25 @@ async def logout(response: Response):
 async def status(request: Request):
     return {"authenticated": is_authenticated(request), "auth_disabled": settings.auth_disabled,
             "configured": bool(settings.access_token) or settings.auth_disabled}
+
+
+# Browser hardening on every response (the app serves the dashboard itself, so no nginx change is needed).
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+       "frame-ancestors 'none'")
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CSP,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Strict-Transport-Security": "max-age=31536000",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        for k, v in SECURITY_HEADERS.items():
+            response.headers.setdefault(k, v)
+        return response
