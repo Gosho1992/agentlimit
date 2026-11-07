@@ -92,7 +92,9 @@ export default function App() {
       {route.page === "run" && route.run && (
         <SessionDashboard key={route.run} sessionId={route.run} access={runAccess!} onBack={() => go("home#replays")} backLabel="← All runs" />
       )}
-      {route.page === "console" && (!auth ? null : !auth.authenticated ? (
+      {route.page === "console" && (!auth ? (
+        <div className="card"><p className="muted">Checking access…</p></div>
+      ) : !auth.authenticated ? (
         <Login onDone={refresh} configured={auth.configured} />
       ) : route.session ? (
         <SessionDashboard key={route.session} sessionId={route.session} onBack={() => nav({ page: "console" })} backLabel="← Console" />

@@ -29,12 +29,14 @@ SCENARIOS = [
     {
         "id": "retry",
         "title": "Agent stuck in a loop",
-        "plain": "The task needs a tool that isn't installed, so the agent keeps trying the same broken thing. "
-                 "AgentLimit spots the loop and stops it before it wastes more AI calls.",
-        "expect": "Turns yellow with advice, then the agent is stopped from retrying.",
+        "plain": "The task needs data from the internet, but the sandbox has no internet. The agent keeps "
+                 "retrying the same failing download. AgentLimit spots the loop and stops it before it wastes more AI calls.",
+        "expect": "Turns yellow with advice, then the agent is stopped from retrying (and the download never gets out).",
         "expect_color": "yellow",
-        "task": ("This task REQUIRES the third-party package 'pandas' — do not substitute the standard library. "
-                 "import pandas, load /workspace/orders.csv with pandas.read_csv and print the row count."),
+        "task": ("Download today's exchange rates from https://example.com/fx/today.json using urllib.request "
+                 "and print the USD to EUR rate. The rate exists ONLY at that URL: do not read local files, "
+                 "do not hardcode or guess any number, and do not catch exceptions; if the download fails, "
+                 "let the error propagate."),
         "cpu": 30, "mem": 512, "tokens": 50000, "wall": 300, "cost": 0.25,
     },
     {

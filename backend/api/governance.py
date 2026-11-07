@@ -42,13 +42,15 @@ async def pause(session_id: str):
     if rt.closed:
         raise HTTPException(409, "session already closed")
     rt.engine.force_pause()
-    for _ in range(40):
-        if rt.engine.state.value in ("PAUSE", "KILL"):
+    # the state flips to PAUSE before the kernel freeze finishes: wait for the intervention's own result
+    for _ in range(100):
+        if rt.engine.state.value == "KILL" or rt.engine.interventions.paused_mode is not None:
             break
         await asyncio.sleep(0.05)
     mode = rt.engine.interventions.paused_mode
-    return {"paused": rt.engine.state.value == "PAUSE", "state": rt.engine.state.value,
-            "mode": mode.value if mode else None, "verified_frozen": rt.cgroup.is_frozen()}
+    frozen = bool(mode and mode.value == "KERNEL_FREEZE" and rt.cgroup.is_frozen())
+    return {"paused": rt.engine.state.value == "PAUSE" and mode is not None, "state": rt.engine.state.value,
+            "mode": mode.value if mode else None, "verified_frozen": frozen}
 
 
 @router.post("/{session_id}/resume")

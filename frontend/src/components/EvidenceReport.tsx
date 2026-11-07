@@ -18,7 +18,7 @@ const AREA: Record<string, string> = {
 };
 
 const VCLS: Record<string, string> = { VALID: "ok", FAILED: "fail", PARTIAL: "warn", PENDING: "muted", NOT_APPLICABLE: "muted",
-  COMPLETE: "ok", IN_PROGRESS: "muted", INTERRUPTED: "warn", INCOMPLETE: "fail" };
+  COMPLETE: "ok", IN_PROGRESS: "muted", INTERRUPTED: "warn", INCOMPLETE: "fail", ERROR: "warn" };
 
 export default function EvidenceReport({ sessionId, access = OPERATOR, autoLoad = false, technical = false }: { sessionId: string; access?: Access; autoLoad?: boolean; technical?: boolean }) {
   const [error, setError] = useState<string | null>(null);

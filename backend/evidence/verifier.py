@@ -65,9 +65,11 @@ class DeterministicVerifier:
     def parse_agent_json(stdout: str) -> dict | None:
         """Extract the first JSON object from agent stdout."""
         stdout = stdout.strip()
-        # Fast path: whole thing is JSON
+        # Fast path: whole thing is a JSON object (a bare number/list/string is not a report)
         try:
-            return json.loads(stdout)
+            v = json.loads(stdout)
+            if isinstance(v, dict):
+                return v
         except Exception:
             pass
         # Fallback: find first {...}
@@ -75,7 +77,8 @@ class DeterministicVerifier:
         hi = stdout.rfind("}")
         if lo != -1 and hi > lo:
             try:
-                return json.loads(stdout[lo:hi + 1])
+                v = json.loads(stdout[lo:hi + 1])
+                return v if isinstance(v, dict) else None
             except Exception:
                 return None
         return None

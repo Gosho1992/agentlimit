@@ -153,3 +153,59 @@ async def test_replay_highlights_never_claim_correctness_for_integrity_only(app_
         r = next(x for x in (await anon.get("/public/replays")).json() if x["session_id"] == sid)
         assert r["artifact_verdict"] != "VERIFIED"
         assert not any("re-calculated: correct" in h["text"] for h in r["highlights"])
+
+
+@pytest.mark.asyncio
+async def test_bare_number_output_gets_integrity_only_proof_not_500(app_env):
+    """QA bug: the old retry preset printed a row count; the proof endpoint returned 500."""
+    app, holder = app_env
+    from backend.tests.fakes import FakeRuntime
+    holder["runtime"] = FakeRuntime([{"stdout": "20000\n", "stderr": "", "exit_code": 0}])
+    async with client(app) as anon:
+        r = (await anon.post("/public/try", json={"scenario": "memory"})).json()
+        sid, g = r["session_id"], {"X-Guest-Token": r["guest_token"]}
+        for _ in range(100):
+            if (await anon.get(f"/public/sessions/{sid}", headers=g)).json().get("lifecycle"):
+                break
+            await asyncio.sleep(0.05)
+        resp = await anon.get(f"/public/sessions/{sid}/evidence", headers=g)
+        assert resp.status_code == 200, resp.text
+        ev = resp.json()
+        assert ev["artifact_verification"]["verdict"] == "INTEGRITY_ONLY"
+        assert ev["verification"]["artifact_correctness"] == "NOT_APPLICABLE"
+
+
+@pytest.mark.asyncio
+async def test_pause_reports_the_finished_kernel_freeze(app_env):
+    """QA bug: Freeze said 'not confirmed by the kernel' while the banner said 'kernel confirms'."""
+    app, holder = app_env
+    from backend.tests.fakes import FakeRuntime
+    holder["runtime"] = FakeRuntime([{"stdout": "", "stderr": "", "exit_code": 0}], delay=30)
+    async with client(app) as anon:
+        r = (await anon.post("/public/try", json={"scenario": "runaway"})).json()
+        sid, g = r["session_id"], {"X-Guest-Token": r["guest_token"]}
+        await asyncio.sleep(0.2)
+        p = (await anon.post(f"/public/sessions/{sid}/pause", headers=g)).json()
+        assert p["paused"] is True and p["mode"] == "KERNEL_FREEZE" and p["verified_frozen"] is True
+        ev = (await anon.get(f"/public/sessions/{sid}/events", headers=g)).json()
+        pa = [e for e in ev if e["event_type"] == "pause_applied"][-1]["payload"]
+        assert pa["verified_frozen"] is True                     # API and signed record agree
+        k = (await anon.post(f"/public/sessions/{sid}/kill", headers=g)).json()
+        assert k["verdict"] == "KILL_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_remaining_guest_runs_shown_before_the_click(app_env):
+    app, _ = app_env
+    from backend.config import settings
+    async with client(app) as anon:
+        before = (await anon.get("/public/scenarios")).json()["guest_remaining"]
+        assert before == settings.guest_per_ip_per_hour
+        await anon.post("/public/try", json={"scenario": "reconcile"})
+        assert (await anon.get("/public/scenarios")).json()["guest_remaining"] == before - 1
+
+
+def test_retry_preset_cannot_be_solved_offline():
+    from backend.scenarios import BY_ID
+    t = BY_ID["retry"]["task"]
+    assert "https://" in t and "do not read local files" in t and "do not catch exceptions" in t

@@ -38,10 +38,12 @@ const SCENARIOS: Scenario[] = [
   {
     id: "retry",
     title: "Retry loop → governor stops it",
-    blurb: "A dependency that does not exist. The governor blocks the 4th identical attempt before the model is called.",
+    blurb: "The task needs internet data; the sandbox has none. The governor stops the repeated identical failure.",
     task:
-      "This task REQUIRES the third-party package 'pandas' — do not substitute the standard library. " +
-      "import pandas, load /workspace/orders.csv with pandas.read_csv and print the row count.",
+      "Download today's exchange rates from https://example.com/fx/today.json using urllib.request " +
+      "and print the USD to EUR rate. The rate exists ONLY at that URL: do not read local files, " +
+      "do not hardcode or guess any number, and do not catch exceptions; if the download fails, " +
+      "let the error propagate.",
     cpu: 30, mem: 512, tokens: 50000, wall: 300,
   },
   {
