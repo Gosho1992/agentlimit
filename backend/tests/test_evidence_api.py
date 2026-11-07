@@ -27,7 +27,9 @@ def test_offline_cli_verifier(tmp_path, capsys):
     from backend.scripts.verify_ledger import main
     s = Signer(str(tmp_path / "k"))
     led = EvidenceLedger("x", s, str(tmp_path))
+    led.append("session_created", {"task": "t"})
     led.append("state_transition", {"from": "NORMAL", "to": "ALERT", "cause": "metrics"})
+    led.append("session_closed", {"clean": True})
     assert main(str(led.path), s.public_key_b64()) == 0
     txt = led.path.read_text().replace('"ALERT"', '"NORMAL"', 1)
     led.path.write_text(txt)

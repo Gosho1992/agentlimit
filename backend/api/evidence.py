@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from backend.config import settings
 from backend.evidence.archive import read_entries, summarize
-from backend.evidence.ledger import verify_entries
+from backend.evidence.ledger import ledger_completeness, verify_entries
 from backend.evidence.signer import fingerprint
 from backend.evidence.verifier import DeterministicVerifier
 from backend.governance.containment import evaluate_containment
@@ -214,6 +214,7 @@ def _report(session_id: str) -> dict:
     rt = session_manager.get(session_id)
     pubkey = session_manager.signer.public_key_b64()
     chain_ok, chain_detail = verify_entries(entries, pubkey)
+    completeness, completeness_detail = ledger_completeness(entries, live=bool(rt and not rt.closed))
     summary = summarize(entries)
     inputs = _verify_inputs(session_id, entries)
     artifact = _verify_artifact(session_id, entries, inputs)
@@ -224,6 +225,7 @@ def _report(session_id: str) -> dict:
     inference = _verify_inference(entries)
     verification = {
         "ledger_integrity": "VALID" if chain_ok else "FAILED",
+        "ledger_completeness": completeness,
         "input_integrity": inputs["verdict"],
         "artifact_integrity": artifact["integrity"],
         "artifact_correctness": artifact["correctness"],
@@ -242,6 +244,7 @@ def _report(session_id: str) -> dict:
         "start_failure": (_last(entries, "session_start_failed") or {}).get("payload"),
         "chain_valid": chain_ok,
         "chain_detail": chain_detail,
+        "completeness_detail": completeness_detail,
         "inputs": inputs,
         "artifact_verification": artifact,
         "containment": containment,
@@ -310,10 +313,19 @@ async def tamper_test(session_id: str):
         target_idx, field, before = 0, "event_type", tampered[0]["event_type"]
         tampered[0]["event_type"] = after = "forged"
     tampered_ok, tampered_detail = verify_entries(tampered, pubkey)
+    # second attack: drop the tail (e.g. hide the kill). Integrity alone still passes,
+    # so the completeness check must catch it.
+    truncated = entries[:max(1, len(entries) // 2)]
+    trunc_ok, _ = verify_entries(truncated, pubkey)
+    trunc_completeness, trunc_detail = ledger_completeness(truncated)
     return {
         "original": {"valid": original_ok, "detail": original_detail},
         "tampered_copy": {"entry_index": target_idx, "field": field, "before": before, "after": after,
                           "valid": tampered_ok, "detail": tampered_detail},
+        "truncated_copy": {"kept_entries": len(truncated), "dropped_entries": len(entries) - len(truncated),
+                           "integrity_valid": trunc_ok, "completeness": trunc_completeness,
+                           "detail": trunc_detail},
+        "truncation_detected": len(entries) > 1 and trunc_completeness != "COMPLETE",
         "tamper_detected": original_ok and not tampered_ok,
         "note": "The real ledger is unchanged; only an in-memory copy was modified.",
     }

@@ -9,6 +9,9 @@ User=root
 WorkingDirectory=__REPO__
 EnvironmentFile=__REPO__/backend/.env
 ExecStart=__REPO__/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+# Dead-governor backstop: whenever this service stops or crashes, kill every
+# session workload directly (it lives in its own cgroup, outside this unit's).
+ExecStopPost=/bin/sh -c 'for d in /sys/fs/cgroup/agentlimit/*/; do [ -f "$d/cgroup.kill" ] && echo 1 > "$d/cgroup.kill"; done; true'
 Restart=on-failure
 RestartSec=3
 

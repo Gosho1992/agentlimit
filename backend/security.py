@@ -24,8 +24,17 @@ from starlette.responses import JSONResponse
 from backend.config import settings
 
 COOKIE = "al_session"
-PUBLIC_PREFIXES = ("/health", "/ready", "/auth/", "/assets/")
-PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico"}
+# Explicit allow-list. Every other path, including any future /auth/* route,
+# requires authentication. tests/test_route_inventory.py enforces this.
+PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico", "/health", "/ready",
+                "/auth/login", "/auth/logout", "/auth/status"}
+PUBLIC_PREFIXES = ("/assets/",)
+
+
+def is_public_path(path: str) -> bool:
+    if "/../" in path or path.endswith("/..") or "//" in path or "\\" in path:
+        return False                     # never let a non-normalised path ride a public prefix
+    return path in PUBLIC_EXACT or path.startswith(PUBLIC_PREFIXES)
 
 
 def _cookie_value() -> str:
@@ -47,7 +56,7 @@ def is_authenticated(request: Request) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if request.method == "OPTIONS" or path in PUBLIC_EXACT or path.startswith(PUBLIC_PREFIXES):
+        if request.method == "OPTIONS" or is_public_path(path):
             return await call_next(request)
         if not settings.auth_disabled and not settings.access_token:
             return JSONResponse({"detail": "server has no ACCESS_TOKEN configured; refusing to run unprotected"},

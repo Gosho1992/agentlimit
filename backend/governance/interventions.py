@@ -80,16 +80,20 @@ class InterventionController:
         try:
             self.cg.set_cpu_quota(cpu_quota_usec)
             action = f"cpu.max={cpu_quota_usec}/100000"
+            requested_ok = True
             ok = self.cg.cpu_max().startswith(str(cpu_quota_usec))   # kernel readback
         except Exception as e:
             action = f"cpu_throttle_failed:{e}"
+            requested_ok = False
             ok = False
-        self.throttled = True
+        self.throttled = ok          # only true when the kernel readback confirms it
         inf = getattr(self.orchestrator, "inference", None)
         downgrade = bool(inf and inf.downgrade_available)
         self.ledger.append("throttle_applied", {
             "action": action,
-            "applied": ok,
+            "requested": True,
+            "applied": requested_ok,
+            "verified": ok,
             "model_downgrade": ({"from": settings.vultr_model_default, "to": inf.cheap_model} if downgrade
                                 else f"unavailable ({model_registry.STATE.get('downgrade_reason')}) — CPU throttling only"),
             "cpu_max_readback": self.cg.cpu_max(),
@@ -127,6 +131,9 @@ class InterventionController:
                 detail["memory_budget_bytes"] = self.budget.memory_limit_bytes
                 detail["boundary"] = "host-accounted VMM memory (guest RAM + VMM overhead)"
                 applied = True
+                rb = (self.cg.readback() or {}).get("memory.high")
+                detail["memory.high_readback"] = rb
+                detail["verified"] = rb == str(soft)
             elif action == "notify_operator":
                 detail["note"] = "operator decision required; no automatic action"
             else:
@@ -134,6 +141,8 @@ class InterventionController:
         except Exception as e:
             detail["error"] = str(e)
         detail["applied"] = applied
+        # host-side flags are verified by construction; kernel knobs by readback (above)
+        detail.setdefault("verified", applied)
         self.ledger.append("recommendation_applied", detail)
         return applied
 

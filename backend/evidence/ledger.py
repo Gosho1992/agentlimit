@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ class EvidenceLedger:
         self.path = Path(base_dir) / f"{session_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._prev_hash = self._load_prev_hash()
+        # the out-of-loop watchdog thread may append concurrently with the event loop
+        self._lock = threading.Lock()
 
     def _load_prev_hash(self) -> str:
         if not self.path.exists():
@@ -35,6 +38,10 @@ class EvidenceLedger:
             return "0" * 64
 
     def append(self, event_type: str, payload: dict[str, Any]) -> dict:
+        with self._lock:
+            return self._append_locked(event_type, payload)
+
+    def _append_locked(self, event_type: str, payload: dict[str, Any]) -> dict:
         event = {
             "event_type": event_type,
             "session_id": self.session_id,
@@ -81,3 +88,26 @@ def verify_entries(entries: list[dict], public_key_b64: str) -> tuple[bool, str]
             return False, f"signature mismatch at entry {i} ({ev.get('event_type')})"
         prev = ev["entry_hash"]
     return True, f"ok ({len(entries)} entries)"
+
+
+# Integrity proves entries were not altered; it cannot prove none are missing at
+# the END (a prefix of a valid chain is still a valid chain). Completeness closes
+# that gap: a finished session must end with its signed terminal event, which
+# only the signing key can produce. Anything else is reported, never VALID.
+TERMINAL_EVENTS = ("session_closed", "session_start_failed")
+
+
+def ledger_completeness(entries: list[dict], live: bool = False) -> tuple[str, str]:
+    """-> (verdict, detail). COMPLETE / IN_PROGRESS / INTERRUPTED / INCOMPLETE."""
+    if not entries:
+        return "INCOMPLETE", "ledger is empty"
+    if entries[0].get("event_type") != "session_created":
+        return "INCOMPLETE", f"first entry is {entries[0].get('event_type')!r}, not session_created"
+    last_type = entries[-1].get("event_type")
+    if last_type in TERMINAL_EVENTS:
+        return "COMPLETE", f"ends with signed {last_type} ({len(entries)} entries)"
+    if live:
+        return "IN_PROGRESS", "session still running"
+    if last_type == "session_interrupted":
+        return "INTERRUPTED", "server stopped before the session closed (recorded on restart)"
+    return "INCOMPLETE", f"no signed terminal event: ledger ends at {last_type!r} (truncated or cut off)"
