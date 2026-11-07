@@ -39,7 +39,8 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "proc_starttime", lambda pid: 12345)
     monkeypatch.setattr(sm, "session_manager", sm.SessionManager())
     import backend.api.sessions as a1, backend.api.governance as a2, backend.api.evidence as a3, backend.api.stream as a4
-    for mod in (a1, a2, a3, a4):
+    import backend.api.public as a5
+    for mod in (a1, a2, a3, a4, a5):
         monkeypatch.setattr(mod, "session_manager", sm.session_manager)
     orig_init = ia.InferenceAdapter.__init__
 

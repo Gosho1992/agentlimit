@@ -219,6 +219,7 @@ async def test_concurrent_auto_kill_manual_kill_and_resume_yield_one_verified_ki
 # ------------------------------------------------------------------ route inventory
 
 PUBLIC_ROUTES = {"/", "/health", "/ready", "/auth/login", "/auth/logout", "/auth/status"}
+PUBLIC_PREFIX = "/public/"   # own access rules, tested in test_public.py
 
 
 @pytest.fixture
@@ -252,7 +253,7 @@ async def test_every_non_public_route_requires_auth(app):
             path = re.sub(r"\{[^}]+\}", "probe", r.full_path)
             for m in r.methods - {"HEAD"}:
                 resp = await c.request(m, path)
-                if r.full_path in PUBLIC_ROUTES:
+                if r.full_path in PUBLIC_ROUTES or r.full_path.startswith(PUBLIC_PREFIX):
                     continue
                 assert resp.status_code == 401, f"{m} {r.full_path} reachable without auth ({resp.status_code})"
 

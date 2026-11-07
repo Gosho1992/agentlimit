@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     pause_timeout_s: float = 120.0
     vmm_memory_headroom_mb: int = 192   # host memory budget = guest RAM + this
     inflight_drain_s: float = 15.0
-    watchdog_stall_s: float = 15.0       # event-loop heartbeat age that triggers the out-of-loop kill
+    watchdog_stall_s: float = 15.0
+    guest_mode_enabled: bool = True      # public "try it yourself": preset scenarios only
+    guest_max_live: int = 1              # guest runs at once (MAX_CONCURRENT_SESSIONS still applies)
+    guest_per_ip_per_hour: int = 3       # event-loop heartbeat age that triggers the out-of-loop kill
     token_estimate_chars_per_token: float = 3.0   # conservative (real ~3.5-4)
     token_estimate_margin: float = 1.2            # extra safety margin on prompt estimate
     agent_max_completion_tokens: int = 6000       # reasoning models need room before the code

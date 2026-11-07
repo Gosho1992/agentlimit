@@ -22,10 +22,10 @@ export default function Login({ onDone, configured }: { onDone: () => void; conf
         }
       }}
     >
-      <h2>Access code</h2>
+      <h2>Operator login</h2>
       <p className="muted">
-        This demo runs real microVMs and real Vultr Serverless Inference, so sessions are protected. Judges receive the
-        access code privately from the team. Recorded sessions and their signed evidence stay verifiable offline.
+        <strong>Just visiting? You don't need this.</strong> Use <a href="/#try">Try it</a> to run a preset live, or watch a
+        recorded run. The operator console is for custom tasks and custom limits; judges get the access code privately from the team.
       </p>
       {!configured && <p className="error">Server has no access code configured — sessions are disabled (fail-closed).</p>}
       <label>

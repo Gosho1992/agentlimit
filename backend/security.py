@@ -28,7 +28,7 @@ COOKIE = "al_session"
 # requires authentication. tests/test_route_inventory.py enforces this.
 PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico", "/health", "/ready",
                 "/auth/login", "/auth/logout", "/auth/status"}
-PUBLIC_PREFIXES = ("/assets/",)
+PUBLIC_PREFIXES = ("/assets/", "/public/")   # /public/* enforces its own replay/guest rules
 
 
 def is_public_path(path: str) -> bool:

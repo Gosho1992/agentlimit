@@ -1,59 +1,54 @@
 import { useEffect, useRef, useState } from "react";
-import { getEvents, getSession, streamSession } from "../api/client";
+import { getEvents, getFeatured, getSession, setFeatured, streamSession } from "../api/client";
 import type { GovernanceState, LedgerEntry, SessionSnapshot } from "../types";
+import { CONTAINMENT_PLAIN, KILL_PLAIN, overall, plainRule, scenarioOf } from "../plain";
 import ControlBar from "./ControlBar";
 import EvidenceReport from "./EvidenceReport";
 import GovernanceTimeline from "./GovernanceTimeline";
+import Meter from "./Meter";
 import RecommendationCard from "./RecommendationCard";
-import ResourceGauge from "./ResourceGauge";
+import StatusBanner from "./StatusBanner";
+import Story from "./Story";
+import Term from "./Term";
+import Tour, { tourSeen } from "./Tour";
 
-const LADDER: GovernanceState[] = ["NORMAL", "ALERT", "RECOMMEND", "THROTTLE", "PAUSE", "KILL"];
-
-const CONTAINMENT_LABELS: Record<string, string> = {
-  network_egress_blocked: "Network egress blocked",
-  dns_blocked: "DNS resolution blocked",
-  no_secrets_in_environment: "No API keys / secrets in guest environment",
-  no_host_paths_visible: "Host ledger, keys and cgroup tree invisible",
-  workspace_mounted: "/workspace present",
-  inputs_readable: "Inputs readable by the agent",
-  inputs_read_only: "Inputs read-only to the agent",
-  unprivileged_execution: "Agent code runs unprivileged (non-root uid)",
-  inputs_match_manifest: "Guest sees exactly the hashed input files",
+const TITLES: Record<string, string> = {
+  reconcile: "Useful work, checked",
+  runaway: "Out-of-control agent, stopped",
+  retry: "Agent stuck in a loop",
+  memory: "Agent eating memory",
 };
 
-const CHECK_LABELS: Record<string, string> = {
-  session_marked_terminated: "Session marked terminated",
-  inference_revoked: "Inference revoked (no more model calls)",
-  agent_task_finished: "Host-side agent loop cancelled",
-  cgroup_populated_0: "cgroup.events populated 0",
-  sandbox_pid_gone: "MicroVM host process gone",
-  sandbox_removed_via_runtime: "Sandbox stopped & removed via Microsandbox SDK",
-};
-
-export default function SessionDashboard({ sessionId, onReset }: { sessionId: string; onReset: () => void }) {
-  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+export default function SessionDashboard({ sessionId, onBack, operator, backLabel = "← Back" }: {
+  sessionId: string; onBack: () => void; operator: boolean; backLabel?: string;
+}) {
+  const [snap, setSnap] = useState<(SessionSnapshot & Record<string, any>) | null>(null);
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
-  const [done, setDone] = useState(false);
+  const [technical, setTechnical] = useState(false);
+  const [tour, setTour] = useState(false);
+  const [feat, setFeat] = useState<boolean | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    const push = (e: LedgerEntry) => setEntries((prev) => [...prev, e]);
-    const stop = streamSession(sessionId, {
-      onState: push,
-      onSample: () => {},
-      onRecommend: push,
-      onLedger: push,
-      onDone: () => setDone(true),
-      onError: () => {},
-    });
-    stopRef.current = stop;
-    // The SSE stream is the fast path; polling the signed events endpoint
-    // guarantees the timeline is complete even if the stream drops.
+    if (operator) {
+      // fast path for the operator; the 1 s poll below is the source of truth for everyone
+      const push = (e: LedgerEntry) => setEntries((prev) => [...prev, e]);
+      stopRef.current = streamSession(sessionId, {
+        onState: push, onSample: () => {}, onRecommend: push, onLedger: push,
+        onDone: () => stopRef.current?.(), onError: () => {},
+      });
+      getFeatured(sessionId).then((r) => setFeat(r.featured)).catch(() => setFeat(null));
+    }
+    let closedSeen = false;
     const poll = async () => {
       try {
-        setSnap(await getSession(sessionId));
-      } catch {
-        /* noop */
+        const s = await getSession(sessionId);
+        setSnap(s);
+        setErr(null);
+        closedSeen = !!s.lifecycle || !!s.archived;
+      } catch (e: any) {
+        setErr(e.message);
       }
       try {
         const evs = await getEvents(sessionId);
@@ -67,65 +62,92 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
       }
     };
     poll();
-    const id = setInterval(poll, 1000);
+    const id = setInterval(() => { if (!closedSeen) poll(); }, 1000);
     return () => {
-      stop();
+      stopRef.current?.();
       clearInterval(id);
     };
-  }, [sessionId]);
+  }, [sessionId, operator]);
+
+  const info = overall(snap);
+  useEffect(() => {
+    document.body.dataset.signal = info.signal;
+    return () => { delete document.body.dataset.signal; };
+  }, [info.signal]);
 
   useEffect(() => {
-    if (done) stopRef.current?.();
-  }, [done]);
+    if (snap && !tourSeen()) setTour(true);
+  }, [!!snap]);
 
-  const state = snap?.state ?? "NORMAL";
+  const state = (snap?.state ?? "NORMAL") as GovernanceState;
   const b = snap?.budget;
   const t = snap?.termination;
   const closed = !!snap?.lifecycle || !!snap?.archived;
   const c = snap?.containment;
+  const canControl = operator || !!snap?.can_control;
+  const sc = snap?.scenario ?? scenarioOf(snap?.task);
+  const title = (sc && TITLES[sc]) || (snap ? "Custom task" : "Loading…");
+  const cost = snap?.inference?.committed_cost_usd ?? snap?.inference?.estimated_cost_usd ?? 0;
+
+  // server-computed (monotonic clock), refreshed by the 1 s poll
+  const autoStopIn = state === "PAUSE" && !closed && typeof snap?.auto_stop_in_s === "number"
+    ? Math.round(snap.auto_stop_in_s) : null;
+
+  if (err && !snap) {
+    return (
+      <div className="card">
+        <p className="error">This run isn't available: {err}</p>
+        <button onClick={onBack}>{backLabel}</button>
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard">
-      <div className="dashboard-header">
-        <div>
-          <h2>
-            Session <code>{sessionId}</code>
-          </h2>
-          <p className="muted">
-            Agent: <strong>{snap?.agent_status ?? "…"}</strong> · Steps: {snap?.steps ?? 0} ·{" "}
-            {snap?.runtime_type === "microsandbox" ? (
-              <span className="ok">Microsandbox microVM (KVM) · VMM pid {snap?.sandbox_pid}</span>
-            ) : (
-              <span className="warn">{snap?.runtime_type || "runtime pending"}</span>
-            )}
-            {closed && " · session closed"}
-            {snap?.archived && " · archived (read-only, from signed ledger)"}
-          </p>
+      <div className="dash-top">
+        <button className="btn-ghost" onClick={onBack}>{backLabel}</button>
+        <div className="dash-title">
+          <h2>{title}</h2>
+          <span className="muted small">
+            {snap?.archived ? "Recorded real run · replay from its signed record" : closed ? "Finished run" : "Live run on a Vultr server"}
+            {" · "}run <code>{sessionId}</code>
+          </span>
         </div>
-        <button onClick={onReset}>New session</button>
+        <div className="dash-tools">
+          <button className="btn-ghost" onClick={() => setTour(true)}>❔ Tour</button>
+          <label className="switch">
+            <input type="checkbox" checked={technical} onChange={(e) => setTechnical(e.target.checked)} />
+            <span>Technical details</span>
+          </label>
+          {operator && feat !== null && (
+            <button className="btn-ghost" title="Show this run on the public page as a replay"
+              onClick={() => setFeatured(sessionId, !feat).then((r) => setFeat(r.featured))}>
+              {feat ? "★ Public replay" : "☆ Make public replay"}
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="ladder">
-        {LADDER.map((s) => (
-          <div
-            key={s}
-            className={`ladder-step state-${s.toLowerCase()} ${s === state ? "current" : ""} ${
-              LADDER.indexOf(s) < LADDER.indexOf(state) ? "passed" : ""
-            }`}
-          >
-            {s}
-          </div>
-        ))}
-      </div>
+      <StatusBanner info={info} state={state} />
+      {autoStopIn !== null && (
+        <div className="countdown">
+          ⏱️ Waiting for a human. If nobody unfreezes it, AgentLimit will <strong>stop it for good in {autoStopIn} s</strong>.
+          {canControl && " Use the buttons under Limits to decide now."}
+        </div>
+      )}
 
       {t && (
-        <div className={`termination ${t.verdict === "KILL_CONFIRMED" ? "confirmed" : "failed"}`}>
-          <h3>{t.verdict === "KILL_CONFIRMED" ? "✓ KILL CONFIRMED" : "✗ KILL NOT CONFIRMED"}</h3>
-          <p className="muted">reason: {t.reason}</p>
-          <ul>
+        <div className={`killbox ${t.verdict === "KILL_CONFIRMED" ? "confirmed" : "failed"}`}>
+          <h3>{t.verdict === "KILL_CONFIRMED" ? "🛑 Stopped for good, and proven" : "✗ Stop could not be fully confirmed"}</h3>
+          <p className="small">
+            Why: {t.reason?.startsWith("hard_limit") ? `it hit its hard limit (${t.reason.split(":")[1]?.replace("_", " ")})` : t.reason?.includes("operator") ? "a human pressed Stop for good" : t.reason}.
+            AgentLimit then checked six separate things:
+          </p>
+          <ul className="checks">
             {Object.entries(t.checks).map(([k, v]) => (
               <li key={k} className={v ? "ok" : "fail"}>
-                {v ? "✓" : "✗"} {CHECK_LABELS[k] ?? k}
+                {v ? "✓" : "✗"} {KILL_PLAIN[k] ?? k}
+                {technical && <span className="tech-line">{k}</span>}
               </li>
             ))}
           </ul>
@@ -133,93 +155,102 @@ export default function SessionDashboard({ sessionId, onReset }: { sessionId: st
       )}
 
       <div className="grid">
-        <div className="card">
-          <h3>Observed by the governor (host-side, not self-reported)</h3>
-          {b && snap && (
+        <div id="tour-meters" className="card">
+          <h3><Term k="Budget">Limits</Term> <span className="muted small">measured from outside the sandbox</span></h3>
+          {b && snap ? (
             <>
-              <ResourceGauge label="CPU used vs budget (cumulative, host cpu.stat)" used={snap.cpu_usec / 1e6} limit={b.cpu_budget_usec / 1e6} unit="s" />
-              <ResourceGauge
-                label={`Memory peak, host-accounted microVM (memory.peak)${snap.memory_telemetry_valid ? "" : " · telemetry not yet validated"}`}
-                used={snap.memory_peak_bytes / 2 ** 20}
-                limit={b.memory_limit_bytes / 2 ** 20}
-                unit="MB"
-              />
-              <ResourceGauge
-                label={`Tokens committed (settled + reserved; ${snap.inference.calls ?? 0} calls)`}
-                used={snap.tokens}
-                limit={b.token_limit}
-                unit="tok"
-                format={(n) => `${Math.round(n).toLocaleString()}`}
-              />
-              <ResourceGauge label="Wall clock" used={snap.wall_seconds} limit={b.wall_clock_limit_seconds} unit="s" />
-              <p className="muted small">
-                Cost (estimate{snap.inference.cost_known === false ? ", model price UNKNOWN" : ""}): settled $
-                {snap.inference.estimated_cost_usd.toFixed(5)} · in flight ${(snap.inference.in_flight_reserved_cost_usd ?? 0).toFixed(5)} ·
-                uncertain ${(snap.inference.uncertain_reserved_cost_usd ?? 0).toFixed(5)} · committed $
-                {(snap.inference.committed_cost_usd ?? 0).toFixed(5)} · effective model {snap.inference.effective_model ?? snap.inference.last_model}
-                {snap.inference.throttled
-                  ? snap.inference.model_downgrade_available
-                    ? ` (THROTTLE: downgraded to ${snap.inference.cheap_model})`
-                    : ` (THROTTLE: CPU bandwidth restricted; model downgrade unavailable — ${snap.inference.downgrade_reason ?? "not configured"})`
-                  : ""}
-                {snap.inference.cost_limit_usd ? ` · cap $${snap.inference.cost_limit_usd}` : ""}
-                {snap.inference.in_flight ? ` · ${snap.inference.in_flight} request in flight` : ""}
-                {snap.inference.uncertain_requests ? ` · ${snap.inference.uncertain_reserved_tokens} tokens uncertain (no provider usage received)` : ""}
-                {snap.inference.revoked ? " · inference revoked" : ""}
+              <Meter name="Computer time" term="CPU time" used={snap.cpu_usec / 1e6} limit={b.cpu_budget_usec / 1e6}
+                fmt={(n) => `${n.toFixed(1)} s`} hint="processor work used so far" />
+              <Meter name="Memory" term="Memory" used={snap.memory_peak_bytes / 2 ** 20} limit={b.memory_limit_bytes / 2 ** 20}
+                fmt={(n) => `${Math.round(n)} MB`} hint={snap.memory_telemetry_valid ? "peak working space" : "peak working space (meter warming up)"} />
+              <Meter name="AI usage" term="Tokens" used={snap.tokens} limit={b.token_limit}
+                fmt={(n) => `${Math.round(n).toLocaleString()} tokens`} hint={`${snap.inference.calls ?? 0} AI calls`} />
+              <Meter name="Running time" used={snap.wall_seconds} limit={b.wall_clock_limit_seconds}
+                fmt={(n) => `${Math.round(n)} s`} hint="clock time since start" />
+              <p className="small">
+                AI cost so far ≈ <strong>${cost.toFixed(4)}</strong> <span className="muted">(estimate from Vultr's price list)</span>
+                {snap.inference.throttled && snap.inference.model_downgrade_available && (
+                  <> · switched to cheaper model <code>{snap.inference.cheap_model}</code></>
+                )}
+                {snap.inference.revoked && <> · AI access closed</>}
               </p>
-            </>
-          )}
-          <ControlBar sessionId={sessionId} state={state} closed={closed} />
-        </div>
-
-        <div className="card">
-          <h3>Containment</h3>
-          {c ? (
-            <>
-              <p className={c.passed ? "ok" : "fail"}>
-                <strong>{c.passed ? "All mandatory checks passed (verified in-guest before execution)" : `FAILED: ${c.failed_checks.join(", ")}`}</strong>
-              </p>
-              <ul className="checklist">
-                {Object.entries(c.checks || {}).map(([k, v]) => (
-                  <li key={k} className={v ? "ok" : "fail"}>{v ? "✓" : "✗"} {CONTAINMENT_LABELS[k] ?? k}</li>
-                ))}
-                <li className={snap?.lifecycle?.sandbox_removed && snap?.lifecycle?.workload_gone && snap?.lifecycle?.cgroup_removed ? "ok" : snap?.lifecycle ? "fail" : "muted"}>
-                  {snap?.lifecycle
-                    ? snap.lifecycle.sandbox_removed && snap.lifecycle.workload_gone && snap.lifecycle.cgroup_removed
-                      ? "✓ microVM stopped & removed, cgroup removed"
-                      : `✗ cleanup incomplete${snap.lifecycle.sandbox_stop_error ? ": " + snap.lifecycle.sandbox_stop_error : ""}`
-                    : "… microVM destroyed when the session ends"}
-                </li>
-              </ul>
-              {snap?.memory_plan && (
-                <p className="muted small">
-                  Memory boundary: {snap.memory_plan.boundary}. memory.max {Math.round(snap.memory_plan.host_memory_max_bytes / 2 ** 20)} MB ·
-                  memory.high {Math.round(snap.memory_plan.memory_high_bytes / 2 ** 20)} MB · guest RAM {snap.memory_plan.guest_ram_mb} MB
+              {technical && (
+                <p className="muted small tech-block">
+                  cpu.stat {snap.cpu_usec} µs · memory.peak {snap.memory_peak_bytes} B · settled ${snap.inference.estimated_cost_usd.toFixed(5)} ·
+                  in-flight ${(snap.inference.in_flight_reserved_cost_usd ?? 0).toFixed(5)} · uncertain ${(snap.inference.uncertain_reserved_cost_usd ?? 0).toFixed(5)} ·
+                  model {snap.inference.effective_model ?? snap.inference.last_model} · runtime {snap.runtime_type} · VMM pid {snap.sandbox_pid}
+                  {snap.memory_plan && ` · memory.max ${Math.round(snap.memory_plan.host_memory_max_bytes / 2 ** 20)} MB, memory.high ${Math.round(snap.memory_plan.memory_high_bytes / 2 ** 20)} MB, guest RAM ${snap.memory_plan.guest_ram_mb} MB`}
                 </p>
               )}
             </>
-          ) : (
-            <p className="muted">Probe pending…</p>
-          )}
+          ) : <p className="muted">Starting…</p>}
+          {canControl && <ControlBar sessionId={sessionId} state={state} closed={closed} operator={operator} technical={technical} />}
+          {!canControl && !closed && <p className="muted small">Only the person who started this run can freeze or stop it.</p>}
         </div>
 
+        <div className="card">
+          <Story entries={entries} technical={technical} />
+        </div>
+
+        <div className="card">
+          <h3>🔒 <Term k="Sandbox">Sealed sandbox</Term></h3>
+          {c ? (
+            <>
+              <p className={c.passed ? "ok" : "fail"}>
+                {c.passed ? "Checked from inside before the agent ran:" : `Safety check failed: ${c.failed_checks.join(", ")}`}
+              </p>
+              <ul className="checks">
+                {Object.entries(c.checks || {}).map(([k, v]) => (
+                  <li key={k} className={v ? "ok" : "fail"}>
+                    {v ? "✓" : "✗"} {CONTAINMENT_PLAIN[k] ?? k}{technical && <span className="tech-line">{k}</span>}
+                  </li>
+                ))}
+                <li className={snap?.lifecycle ? (snap.lifecycle.sandbox_removed && snap.lifecycle.workload_gone ? "ok" : "fail") : "muted"}>
+                  {snap?.lifecycle
+                    ? snap.lifecycle.sandbox_removed && snap.lifecycle.workload_gone ? "✓ Sandbox destroyed after the run" : "✗ Clean-up incomplete"
+                    : "… Sandbox will be destroyed when the run ends"}
+                </li>
+              </ul>
+              <p className="muted small">It's a <Term k="MicroVM">microVM</Term>: a tiny separate computer, not just a folder.</p>
+            </>
+          ) : <p className="muted">Checking…</p>}
+        </div>
+
+        <div className="card">
+          <h3>💡 Advice from AgentLimit</h3>
+          {(snap?.recommendations ?? []).length === 0 && <p className="muted">No problems spotted so far.</p>}
+          {(snap?.recommendations ?? []).map((r, i) =>
+            technical ? <RecommendationCard key={r.recommendation_id ?? i} rec={r} /> : (
+              <div key={r.recommendation_id ?? i} className="advice">
+                <p>{plainRule(r.rule_id)}</p>
+                <p className="small muted">
+                  {r.status === "applied" ? "✓ AgentLimit applied this fix itself and checked it worked."
+                    : r.status === "pending_operator" ? "Needs a human decision." : r.status === "failed" ? "The fix could not be applied (recorded)." : ""}
+                </p>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      <details className="card task-box">
+        <summary>The exact task given to the agent</summary>
+        <p className="mono small">{snap?.task}</p>
+        <p className="muted small">The agent writes its own Python code for this, then runs it inside the sealed sandbox.</p>
+      </details>
+
+      <div id="tour-proof" className="card">
+        <h3>🧾 The proof <span className="muted small">re-checked from the signed record</span></h3>
+        {!closed && <p className="muted">The full proof appears when the run ends.</p>}
+        <EvidenceReport key={String(closed)} sessionId={sessionId} autoLoad={closed} technical={technical} />
+      </div>
+
+      {technical && (
         <div className="card">
           <GovernanceTimeline entries={entries} />
         </div>
+      )}
 
-        <div className="card">
-          <h3>Recommendations (deterministic, from observed metrics)</h3>
-          {(snap?.recommendations ?? []).length === 0 && <p className="muted">No recommendations yet.</p>}
-          {(snap?.recommendations ?? []).map((r, i) => (
-            <RecommendationCard key={r.recommendation_id ?? i} rec={r} />
-          ))}
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>Prove: evidence &amp; independent verification</h3>
-        <EvidenceReport sessionId={sessionId} autoLoad={closed} />
-      </div>
+      <Tour open={tour} onClose={() => setTour(false)} />
     </div>
   );
 }
