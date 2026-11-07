@@ -16,8 +16,10 @@ from backend.database import init_db
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("agentlimit")
 
-app = FastAPI(title="AgentLimit", version="1.4.0",
-              description="External runtime governor for autonomous AI agents on Vultr.")
+# No interactive API docs on a public deployment (they sit behind auth anyway).
+_docs = {} if not settings.public_deployment else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+app = FastAPI(title="AgentLimit", version="1.5.0", debug=False,
+              description="External runtime governor for autonomous AI agents on Vultr.", **_docs)
 
 app.add_middleware(security.AuthMiddleware)
 _origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
@@ -68,6 +70,7 @@ async def _startup():
         await session_manager.recover()
     except Exception as e:
         log.error("startup recovery failed: %s", e)
+    session_manager.start_watchdog()
     if not settings.vultr_inference_key:
         _inference_status.update(checked=True, ok=False, error="VULTR_INFERENCE_KEY not set")
         log.error("VULTR_INFERENCE_KEY not set")
@@ -133,11 +136,17 @@ def _readiness() -> dict:
     checks["default_model_available"] = bool(model_registry.STATE.get("default_available"))
     checks["access_token_configured"] = bool(settings.access_token) and len(settings.access_token) >= 24
     checks["auth_enabled"] = not settings.auth_disabled or not settings.public_deployment
+    wd = session_manager.watchdog.status()
+    checks["watchdog_running"] = wd["running"] and not session_manager.watchdog.stalled()
     info = {
         "default_model_priced": has_price(settings.vultr_model_default),
         "dollar_caps_available": has_price(settings.vultr_model_default),
         "model_downgrade": {"enabled": model_registry.STATE.get("downgrade_enabled", False),
                             "reason": model_registry.STATE.get("downgrade_reason")},
+        "watchdog": wd,
+        "infrastructure_ready": all(v for k, v in checks.items()
+                                    if k not in ("inference_key_configured", "default_model_available")),
+        "model_ready": checks["inference_key_configured"] and checks["default_model_available"],
         "cgroup_freeze_available": Path("/sys/fs/cgroup/cgroup.freeze").exists() or "cgroup.freeze" in ctrl or None,
     }
     return {"ready": all(checks.values()), "checks": checks,

@@ -4,6 +4,7 @@ import type { EvidenceReport as Report, TamperResult } from "../types";
 
 const AREA: Record<string, string> = {
   ledger_integrity: "Ledger integrity (hash chain + Ed25519)",
+  ledger_completeness: "Ledger completeness (ends with signed terminal event)",
   input_integrity: "Input integrity (snapshot re-hashed)",
   artifact_integrity: "Artifact integrity (output re-hashed)",
   artifact_correctness: "Artifact correctness (independent recomputation)",
@@ -14,7 +15,8 @@ const AREA: Record<string, string> = {
   inference_accounting: "Inference accounting",
 };
 
-const VCLS: Record<string, string> = { VALID: "ok", FAILED: "fail", PARTIAL: "warn", PENDING: "muted", NOT_APPLICABLE: "muted" };
+const VCLS: Record<string, string> = { VALID: "ok", FAILED: "fail", PARTIAL: "warn", PENDING: "muted", NOT_APPLICABLE: "muted",
+  COMPLETE: "ok", IN_PROGRESS: "muted", INTERRUPTED: "warn", INCOMPLETE: "fail" };
 
 export default function EvidenceReport({ sessionId, autoLoad = false }: { sessionId: string; autoLoad?: boolean }) {
   const [report, setReport] = useState<Report | null>(null);
@@ -54,6 +56,16 @@ export default function EvidenceReport({ sessionId, autoLoad = false }: { sessio
             {String(tamper.tampered_copy.before)} → {String(tamper.tampered_copy.after)} in a copy. Verifier:{" "}
             {tamper.tampered_copy.detail}. Original ledger: {tamper.original.valid ? "valid" : "INVALID"}.
           </p>
+          {tamper.truncated_copy && (
+            <p className="small">
+              <strong className={tamper.truncation_detected ? "ok" : "fail"}>
+                {tamper.truncation_detected ? "✓ Truncation detected" : "✗ Truncation NOT detected"}
+              </strong>{" "}
+              — dropped the last {tamper.truncated_copy.dropped_entries} entries of a copy: hash chain still{" "}
+              {tamper.truncated_copy.integrity_valid ? "valid" : "invalid"}, but completeness ={" "}
+              <strong>{tamper.truncated_copy.completeness}</strong> ({tamper.truncated_copy.detail}).
+            </p>
+          )}
           <p className="muted small">{tamper.note}</p>
         </div>
       )}

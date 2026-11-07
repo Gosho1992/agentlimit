@@ -117,14 +117,30 @@ Cost is shown as an **estimate** from a price table (default: Vultr's published 
   curl -s http://<host>/sessions/<id>/evidence/public-key
   python backend/scripts/verify_ledger.py ledger.jsonl <public_key_b64>
   ```
+- **Completeness, not just integrity:** a prefix of a valid hash chain is still a valid chain, so integrity alone cannot show that the tail (say, the kill) was cut off. A finished session must therefore **end with its signed `session_closed` entry**, which only the signing key can produce. The report shows `ledger_completeness` as `COMPLETE`, `IN_PROGRESS`, `INTERRUPTED` (server stopped mid-session, recorded at restart) or `INCOMPLETE`, never a silent VALID. The offline verifier exits `3` for a valid-but-incomplete ledger. The dashboard's tamper test runs both attacks on a copy: an edited entry (integrity FAILED) and a dropped tail (integrity still valid, completeness INCOMPLETE).
 - **Persistence:** sessions are stored as their signed ledgers. After a restart, past sessions are listed and their evidence is re-verified from the ledger, read-only.
+- **What the kill checks are, and are not:** they are independent of the *agent's* self-report (kernel cgroup state, the VMM process identity, the runtime, the host orchestrator), but they run in the same host controller. They are not hardware-rooted attestation and do not hold against a compromised host.
 - **Trust model:** tamper-evident as long as the signing key is not compromised. Verify against the *published fingerprint*, not only the key the server serves. It is *not* immutable against someone with host root. The verifier runs host-side, isolated from the agent, but not in a separate VM.
 
 ---
 
+## When the governor itself fails
+
+A governor that can die silently is not a governor. Three layers, each independent of the one above:
+
+| Failure | What stops the workload |
+|---|---|
+| Engine tick keeps raising | after 5 consecutive errors the engine goes to KILL itself (`governor_fault_fail_closed`) |
+| Engine task exits or crashes | the session watcher sees the task finish and finalizes the session: agent cancelled, inference revoked, microVM stopped and removed |
+| **Event loop stalls** (blocking call, deadlock) | an **OS-thread watchdog** outside the loop sees the 1 s heartbeat go stale (15 s), writes `cgroup.kill` for every live session directly, and signs a `watchdog_kill` entry. When the loop recovers, the engine completes the normal verified KILL |
+| Server process dies | systemd `ExecStopPost` writes `cgroup.kill` for every session cgroup (they live outside the service's own cgroup), and startup recovery removes leftover sandboxes and marks the ledger `INTERRUPTED` |
+
+Interventions record `requested`, `applied` and `verified` separately. For example, a CPU throttle counts as verified only when the kernel's `cpu.max` readback matches, and `memory.high` is read back too. A recommendation that could not be delivered to the agent is logged as `recommendation_delivery_failed`, not dropped.
+
 ## Security of the public deployment
 
 - **Authentication:** every session, control, stream and evidence endpoint requires `ACCESS_TOKEN`, either as a `Bearer` header (curl/scripts) or as the HttpOnly, SameSite=Strict cookie issued by `POST /auth/login` (the dashboard). With no token configured, the APIs return 503: they refuse to run unprotected. `/health` shows only readiness unless you are authenticated. Login attempts are rate-limited.
+- **Route policy:** public routes are an explicit allow-list (`/`, `/health`, `/ready`, the three `/auth/*` routes and static `/assets/`). Non-normalised paths (`..`, `//`) never match a public rule. Tests in `test_hardening.py` walk **every registered route** and require 401 without credentials. The interactive API docs (`/docs`, `/openapi.json`) are disabled on a public deployment.
 - **CORS:** same-origin only by default (the dashboard is served by the backend). Extra origins must be listed in `ALLOWED_ORIGINS`.
 - **TLS:** HTTPS with Let's Encrypt when the installer is given `DOMAIN` (a free `<ip>.sslip.io` name works). Cookies are then `Secure`. Without `DOMAIN`, the deployment is plain HTTP and is described that way.
 - **Spend caps across all sessions:** at most `MAX_CONCURRENT_SESSIONS` running, `MAX_SESSIONS_PER_HOUR` started per hour, and `MAX_TOKENS_PER_DAY` tokens per day (in-flight reservations included). These sit on top of the per-session budgets.
@@ -167,7 +183,7 @@ Its output is saved to `/var/lib/agentlimit/day1_gate.txt`. Claim only what pass
 
 ```bash
 pip install -r backend/requirements.txt
-python -m pytest backend/tests -q        # 127 pass anywhere; 3 kernel tests run on cgroup v2 as root
+python -m pytest backend/tests -q        # 148 pass anywhere; 3 kernel tests run on cgroup v2 as root
 cd frontend && npm install && npm run dev
 ```
 

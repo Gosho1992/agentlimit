@@ -129,6 +129,18 @@ class SessionManager:
         self._sessions: dict[str, SessionRuntime] = {}
         self._signer = Signer(settings.signer_key_path)
         self.usage = UsageStore()
+        from backend.governance.watchdog import Watchdog
+        self.watchdog = Watchdog(self.live_sessions, stall_s=settings.watchdog_stall_s)
+        self._heartbeat_task: asyncio.Task | None = None
+
+    def live_sessions(self) -> list:
+        return [rt for rt in list(self._sessions.values()) if not rt.closed and rt.engine_task is not None]
+
+    def start_watchdog(self) -> None:
+        """Heartbeat on the event loop + checker on an OS thread (see governance/watchdog.py)."""
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self.watchdog.heartbeat_task())
+        self.watchdog.start()
 
     @property
     def signer(self) -> Signer:

@@ -163,6 +163,8 @@ export interface EvidenceReport {
 export interface TamperResult {
   original: { valid: boolean; detail: string };
   tampered_copy: { entry_index: number; field: string; before: any; after: any; valid: boolean; detail: string };
+  truncated_copy?: { kept_entries: number; dropped_entries: number; integrity_valid: boolean; completeness: string; detail: string };
+  truncation_detected?: boolean;
   tamper_detected: boolean;
   note: string;
 }

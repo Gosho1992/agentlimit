@@ -325,8 +325,11 @@ class GovernanceEngine:
             if self.orchestrator is not None:
                 try:
                     await self.orchestrator.receive_recommendation(d)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # never silent: a recommendation the agent did not receive is evidence too
+                    d["delivery"] = "failed"
+                    self.ledger.append("recommendation_delivery_failed", {
+                        "rule_id": d.get("rule_id"), "error": f"{type(e).__name__}: {e}"[:300]})
             if rec.auto_applicable:
                 d["status"] = "applied" if await self.interventions.apply_recommendation(d) else "failed"
             else:

@@ -80,13 +80,15 @@ async def test_completed_session_is_verified_and_cleaned_up(app_env):
         av = ev["artifact_verification"]
         assert av["level"] == 2 and av["verdict"] == "VERIFIED", av
         v = ev["verification"]
-        assert v == {"ledger_integrity": "VALID", "input_integrity": "VALID", "artifact_integrity": "VALID",
+        assert v == {"ledger_integrity": "VALID", "ledger_completeness": "COMPLETE", "input_integrity": "VALID", "artifact_integrity": "VALID",
                      "artifact_correctness": "VALID", "containment": "VALID", "resource_limits": "VALID",
                      "termination": "NOT_APPLICABLE", "execution_cleanup": "VALID",
                      "inference_accounting": "VALID"}, v
 
         t = (await c.post(f"/sessions/{sid}/evidence/tamper-test")).json()
         assert t["tamper_detected"] and t["original"]["valid"] and not t["tampered_copy"]["valid"]
+        assert t["truncation_detected"] and t["truncated_copy"]["integrity_valid"] \
+            and t["truncated_copy"]["completeness"] == "INCOMPLETE"
 
         exp = await c.get(f"/sessions/{sid}/evidence/export")
         assert exp.headers["X-AgentLimit-Public-Key"] == ev["public_key_b64"]
