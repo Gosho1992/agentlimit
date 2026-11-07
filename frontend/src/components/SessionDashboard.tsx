@@ -10,7 +10,7 @@ import RecommendationCard from "./RecommendationCard";
 import StatusBanner from "./StatusBanner";
 import Story from "./Story";
 import Term from "./Term";
-import Tour, { tourSeen } from "./Tour";
+import Tour from "./Tour";
 
 const TITLES: Record<string, string> = {
   reconcile: "Useful work, checked",
@@ -76,9 +76,6 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
     return () => { delete document.body.dataset.signal; };
   }, [info.signal]);
 
-  useEffect(() => {
-    if (snap && !tourSeen()) setTour(true);
-  }, [!!snap]);
 
   const state = (snap?.state ?? "NORMAL") as GovernanceState;
   const b = snap?.budget;
@@ -115,7 +112,7 @@ export default function SessionDashboard({ sessionId, onBack, access = OPERATOR,
           </span>
         </div>
         <div className="dash-tools">
-          <button className="btn-ghost" onClick={() => setTour(true)}>❔ Tour</button>
+          <button className="btn-tour" onClick={() => setTour(true)}>❔ 1-minute tour</button>
           <label className="switch">
             <input type="checkbox" checked={technical} onChange={(e) => setTechnical(e.target.checked)} />
             <span>Technical details</span>

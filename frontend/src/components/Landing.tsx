@@ -22,7 +22,10 @@ type Load<T> = { state: "loading" } | { state: "error"; error: string } | { stat
 export default function Landing({ go, openRun }: { go: (page: string) => void; openRun: (id: string, token?: string) => void }) {
   const [sc, setSc] = useState<Load<{ scenarios: PublicScenario[]; guest_mode: boolean }>>({ state: "loading" });
   const [rp, setRp] = useState<Load<any[]>>({ state: "loading" });
+  const [ready, setReady] = useState<boolean | null>(null);
   const scenarios = sc.state === "ok" ? sc.data.scenarios : [];
+  const info: any = sc.state === "ok" ? sc.data : {};
+  const replaysPublished = rp.state === "ok" && rp.data.length > 0;
   const guest = sc.state === "ok" ? sc.data.guest_mode : false;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -35,7 +38,10 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
     setRp({ state: "loading" });
     getReplays().then((d) => setRp({ state: "ok", data: d })).catch((e) => setRp({ state: "error", error: e.message }));
   };
-  useEffect(() => { loadScenarios(); loadReplays(); }, []);
+  useEffect(() => {
+    loadScenarios(); loadReplays();
+    fetch("/ready").then((r) => r.json()).then((j) => setReady(!!j.ready)).catch(() => setReady(false));
+  }, []);
 
   async function start(id: string) {
     setBusy(id);
@@ -45,6 +51,7 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
       openRun(r.session_id, r.guest_token);
     } catch (e: any) {
       setErr(e.message);
+      loadScenarios();                      // refresh the remaining-runs counter
     } finally {
       setBusy(null);
     }
@@ -64,8 +71,14 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
         </p>
         <div className="hero-cta">
           <button className="btn-big" onClick={() => jump("try")}>▶ Try it now (no sign-up)</button>
-          <button className="btn-big btn-ghost" onClick={() => jump("replays")}>Watch a real run</button>
+          {replaysPublished && <button className="btn-big btn-ghost" onClick={() => jump("replays")}>Watch a real run</button>}
           <button className="btn-big btn-ghost" onClick={() => go("guide")}>How it works</button>
+        </div>
+        <div className={`live-chip ${ready === null ? "" : ready ? "up" : "down"}`} role="status">
+          <span className="light-dot" />
+          {ready === null ? "Checking the Vultr server…" : ready
+            ? "Live: the Vultr server is ready for runs"
+            : "The live server isn't ready right now; recorded runs still work"}
         </div>
         <div className="hero-lights">
           {LADDER.map((s) => (
@@ -123,13 +136,19 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
           <p className="error" role="alert">Couldn't reach the server ({sc.error}). <button className="btn-ghost" onClick={loadScenarios}>Retry</button></p>
         )}
         {sc.state === "ok" && !guest && <p className="warn">Live runs are switched off right now; you can still watch the recorded runs below.</p>}
+        {sc.state === "ok" && guest && (
+          <p className={`quota ${info.guest_remaining === 0 ? "warn" : ""}`}>
+            You can start <strong>{info.guest_remaining}</strong> more of {info.guest_per_hour} runs this hour
+            {info.guest_busy ? " · someone else's run is live right now, so a new one may have to wait 1–3 minutes" : ""}.
+          </p>
+        )}
         <div className="try-grid">
           {scenarios.map((s) => (
             <div key={s.id} className={`try-card edge-${s.expect_color}`}>
               <h3>{s.title}</h3>
               <p>{s.plain}</p>
               <p className="small"><strong>What you'll see:</strong> {s.expect}</p>
-              <button disabled={!guest || !!busy} onClick={() => start(s.id)}>
+              <button disabled={!guest || !!busy || info.guest_remaining === 0} onClick={() => start(s.id)}>
                 {busy === s.id ? "Starting a fresh sandbox…" : "Start this run"}
               </button>
             </div>
@@ -138,7 +157,7 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
         {err && <p className="error">{err}</p>}
       </section>
 
-      <section id="replays" className="replays">
+      {(rp.state !== "ok" || replaysPublished) && <section id="replays" className="replays">
         <h2>🎬 Watch a recorded real run</h2>
         <p className="muted">These ran on the Vultr server and are replayed from their signed record. Each card lists only what that record proves. You can re-check the proof and run the tamper test yourself.</p>
         {rp.state === "loading" && <p className="muted">Loading recorded runs…</p>}
@@ -146,7 +165,6 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
           <p className="error" role="alert">Couldn't load the recorded runs ({rp.error}). This is a connection problem, not missing evidence.{" "}
             <button className="btn-ghost" onClick={loadReplays}>Retry</button></p>
         )}
-        {rp.state === "ok" && rp.data.length === 0 && <p className="muted">No recorded runs published yet.</p>}
         <div className="replay-list">
           {(rp.state === "ok" ? rp.data : []).map((r) => {
             const o = outcome(r);
@@ -167,7 +185,7 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
             );
           })}
         </div>
-      </section>
+      </section>}
 
       <section className="compare">
         <h2>Without vs. with AgentLimit</h2>

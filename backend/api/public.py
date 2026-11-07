@@ -98,12 +98,21 @@ def _require_guest_live(session_id: str, token: str | None) -> None:
 
 # ------------------------------------------------------------------ routes
 
+def _guest_used(ip: str) -> int:
+    now = time.time()
+    return sum(1 for t in _guest_starts.get(ip, ()) if now - t <= 3600)
+
+
 @router.get("/scenarios")
-async def list_scenarios():
+async def list_scenarios(request: Request):
+    used = _guest_used(security.client_ip(request))
+    busy = any(getattr(rt, "guest", False) and not rt.closed for rt in session_manager.list())
     return {"scenarios": [scenarios.public_view(s) for s in scenarios.SCENARIOS],
             "guest_mode": settings.guest_mode_enabled,
             "guest_live_limit": settings.guest_max_live,
-            "guest_per_hour": settings.guest_per_ip_per_hour}
+            "guest_per_hour": settings.guest_per_ip_per_hour,
+            "guest_remaining": max(0, settings.guest_per_ip_per_hour - used),
+            "guest_busy": busy}
 
 
 @router.get("/replays")

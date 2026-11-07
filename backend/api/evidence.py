@@ -13,6 +13,7 @@ verdict: VALID / FAILED / PARTIAL / NOT_APPLICABLE / PENDING.
 """
 
 import copy
+import logging
 import json
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from backend.governance.containment import evaluate_containment
 from backend.services.session_manager import session_manager
 
 router = APIRouter(prefix="/sessions", tags=["evidence"])
+log = logging.getLogger("agentlimit.evidence")
 
 KILL_CHECKS = ("session_marked_terminated", "inference_revoked", "agent_task_finished",
                "cgroup_populated_0", "sandbox_pid_gone", "sandbox_removed_via_runtime")
@@ -104,10 +106,11 @@ def _verify_artifact(session_id: str, entries: list[dict], inputs: dict) -> dict
     report = DeterministicVerifier.parse_agent_json(data.decode("utf-8", "ignore"))
     out["agent_report"] = report
     names = set(inputs.get("files", {}))
-    if report is None or not {"orders.csv", "payments.csv"} <= names:
+    level2_keys = {"missing_payments", "amount_mismatches"}
+    if not isinstance(report, dict) or not level2_keys & set(report) or not {"orders.csv", "payments.csv"} <= names:
         return {**out, "correctness": "NOT_APPLICABLE", "level": 1,
                 "verdict": "INTEGRITY_ONLY" if integrity["match"] else "FAILED",
-                "detail": "no Level-2 check applies (output not JSON or no reconciliation inputs)"}
+                "detail": "no Level-2 check applies to this task (only the reconciliation task has an independent answer check)"}
     if inputs["verdict"] != "VALID":
         return {**out, "correctness": "FAILED", "level": 1, "verdict": "FAILED",
                 "detail": "input snapshot does not match the signed manifest; cannot recompute"}
@@ -216,13 +219,21 @@ def _report(session_id: str) -> dict:
     chain_ok, chain_detail = verify_entries(entries, pubkey)
     completeness, completeness_detail = ledger_completeness(entries, live=bool(rt and not rt.closed))
     summary = summarize(entries)
-    inputs = _verify_inputs(session_id, entries)
-    artifact = _verify_artifact(session_id, entries, inputs)
-    containment = _verify_containment(entries)
-    limits = _verify_limits(entries)
-    cleanup = _verify_cleanup(entries)
-    termination = _verify_termination(entries)
-    inference = _verify_inference(entries)
+    def safe(name, fn, *a):
+        try:
+            return fn(*a)
+        except Exception as e:        # a verifier bug is reported as ERROR for that area, never a 500
+            log.exception("[%s] verification of %s failed", session_id, name)
+            return {"verdict": "ERROR", "integrity": "ERROR", "correctness": "ERROR", "level": 0,
+                    "checks": {}, "failed_checks": [f"verifier_error:{type(e).__name__}"], "passed": False,
+                    "detail": f"verifier error: {type(e).__name__}: {e}"[:300], "files": {}}
+    inputs = safe("inputs", _verify_inputs, session_id, entries)
+    artifact = safe("artifact", _verify_artifact, session_id, entries, inputs)
+    containment = safe("containment", _verify_containment, entries)
+    limits = safe("limits", _verify_limits, entries)
+    cleanup = safe("cleanup", _verify_cleanup, entries)
+    termination = safe("termination", _verify_termination, entries)
+    inference = safe("inference", _verify_inference, entries)
     verification = {
         "ledger_integrity": "VALID" if chain_ok else "FAILED",
         "ledger_completeness": completeness,

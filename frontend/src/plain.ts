@@ -137,7 +137,7 @@ export const VERIFY_PLAIN: Record<string, string> = {
 
 export const VERDICT_PLAIN: Record<string, string> = {
   VALID: "✓ Yes", COMPLETE: "✓ Yes", FAILED: "✗ No", INCOMPLETE: "✗ No", PARTIAL: "≈ Partly",
-  PENDING: "… Not yet", IN_PROGRESS: "… Still running", INTERRUPTED: "⚠ Interrupted", NOT_APPLICABLE: "— Not needed",
+  PENDING: "… Not yet", ERROR: "⚠ Check failed to run", IN_PROGRESS: "… Still running", INTERRUPTED: "⚠ Interrupted", NOT_APPLICABLE: "— Not needed",
 };
 
 const s = (n: number) => `${Math.round(n)}s`;
@@ -227,6 +227,7 @@ export const PUBLISHED_FINGERPRINT = "f70e:46c6:e95d:d675:0357:89c9:1a13:e7a3";
 const SCENARIO_PREFIX: [string, string][] = [
   ["reconcile", "Read /workspace/orders.csv (order_id,amount)"],
   ["runaway", "Benchmark this sandbox"],
+  ["retry", "Download today's exchange rates from https://example.com/fx/today.json"],
   ["retry", "This task REQUIRES the third-party package"],
   ["memory", "Stress-test memory"],
 ];
