@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getEvents, getFeatured, getSession, setFeatured, streamSession } from "../api/client";
+import { getEvents, getFeatured, getSession, OPERATOR, setFeatured, streamSession, type Access } from "../api/client";
 import type { GovernanceState, LedgerEntry, SessionSnapshot } from "../types";
 import { CONTAINMENT_PLAIN, KILL_PLAIN, overall, plainRule, scenarioOf } from "../plain";
 import ControlBar from "./ControlBar";
@@ -19,9 +19,10 @@ const TITLES: Record<string, string> = {
   memory: "Agent eating memory",
 };
 
-export default function SessionDashboard({ sessionId, onBack, operator, backLabel = "← Back" }: {
-  sessionId: string; onBack: () => void; operator: boolean; backLabel?: string;
+export default function SessionDashboard({ sessionId, onBack, access = OPERATOR, backLabel = "← Back" }: {
+  sessionId: string; onBack: () => void; access?: Access; backLabel?: string;
 }) {
+  const operator = !access.public;
   const [snap, setSnap] = useState<(SessionSnapshot & Record<string, any>) | null>(null);
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [technical, setTechnical] = useState(false);
@@ -43,7 +44,7 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
     let closedSeen = false;
     const poll = async () => {
       try {
-        const s = await getSession(sessionId);
+        const s = await getSession(sessionId, access);
         setSnap(s);
         setErr(null);
         closedSeen = !!s.lifecycle || !!s.archived;
@@ -51,7 +52,7 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
         setErr(e.message);
       }
       try {
-        const evs = await getEvents(sessionId);
+        const evs = await getEvents(sessionId, access);
         setEntries((prev) => {
           const seen = new Set(prev.map((e) => e.entry_hash));
           const add = evs.filter((e: LedgerEntry) => !seen.has(e.entry_hash));
@@ -67,9 +68,9 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
       stopRef.current?.();
       clearInterval(id);
     };
-  }, [sessionId, operator]);
+  }, [sessionId, operator, access.guestToken]);
 
-  const info = overall(snap);
+  const info = overall(snap, entries);
   useEffect(() => {
     document.body.dataset.signal = info.signal;
     return () => { delete document.body.dataset.signal; };
@@ -136,6 +137,12 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
         </div>
       )}
 
+      {state === "KILL" && !t && (
+        <div className="killbox pending" role="status">
+          <h3>⏳ Stopping and verifying…</h3>
+          <p className="small">Cutting AI access, ending the agent, destroying the sandbox. The six checks appear here when they are done.</p>
+        </div>
+      )}
       {t && (
         <div className={`killbox ${t.verdict === "KILL_CONFIRMED" ? "confirmed" : "failed"}`}>
           <h3>{t.verdict === "KILL_CONFIRMED" ? "🛑 Stopped for good, and proven" : "✗ Stop could not be fully confirmed"}</h3>
@@ -164,15 +171,22 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
               <Meter name="Memory" term="Memory" used={snap.memory_peak_bytes / 2 ** 20} limit={b.memory_limit_bytes / 2 ** 20}
                 fmt={(n) => `${Math.round(n)} MB`} hint={snap.memory_telemetry_valid ? "peak working space" : "peak working space (meter warming up)"} />
               <Meter name="AI usage" term="Tokens" used={snap.tokens} limit={b.token_limit}
-                fmt={(n) => `${Math.round(n).toLocaleString()} tokens`} hint={`${snap.inference.calls ?? 0} AI calls`} />
+                fmt={(n) => `${Math.round(n).toLocaleString()} tokens`} hint={`${snap.inference.calls ?? 0} AI call${snap.inference.calls === 1 ? "" : "s"}`} />
               <Meter name="Running time" used={snap.wall_seconds} limit={b.wall_clock_limit_seconds}
                 fmt={(n) => `${Math.round(n)} s`} hint="clock time since start" />
+              {(snap.inference.cost_limit_usd ?? 0) > 0 && (
+                <Meter name="AI spending (estimate)" used={cost} limit={snap.inference.cost_limit_usd!}
+                  fmt={(n) => `$${n.toFixed(4)}`} hint="dollar cap, from Vultr's price list; includes calls in flight" />
+              )}
               <p className="small">
-                AI cost so far ≈ <strong>${cost.toFixed(4)}</strong> <span className="muted">(estimate from Vultr's price list)</span>
-                {snap.inference.throttled && snap.inference.model_downgrade_available && (
-                  <> · switched to cheaper model <code>{snap.inference.cheap_model}</code></>
-                )}
-                {snap.inference.revoked && <> · AI access closed</>}
+                {[
+                  (snap.inference.cost_limit_usd ?? 0) > 0 ? null
+                    : <span key="c">AI cost so far ≈ <strong>${cost.toFixed(4)}</strong> <span className="muted">(estimate from Vultr's price list; no dollar cap on this run, the token budget applies)</span></span>,
+                  snap.inference.throttled && snap.inference.model_downgrade_available
+                    ? <span key="d">switched to cheaper model <code>{snap.inference.cheap_model}</code></span> : null,
+                  snap.inference.throttled && !snap.inference.model_downgrade_available ? <span key="n">cheaper model not available</span> : null,
+                  snap.inference.revoked ? <span key="r">AI access closed</span> : null,
+                ].filter(Boolean).flatMap((x, i) => (i ? [<span key={`s${i}`}> · </span>, x] : [x]))}
               </p>
               {technical && (
                 <p className="muted small tech-block">
@@ -184,7 +198,8 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
               )}
             </>
           ) : <p className="muted">Starting…</p>}
-          {canControl && <ControlBar sessionId={sessionId} state={state} closed={closed} operator={operator} technical={technical} />}
+          {canControl && <ControlBar sessionId={sessionId} access={access} state={state} closed={closed}
+            killFailed={t?.verdict === "KILL_FAILED"} technical={technical} />}
           {!canControl && !closed && <p className="muted small">Only the person who started this run can freeze or stop it.</p>}
         </div>
 
@@ -223,10 +238,7 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
             technical ? <RecommendationCard key={r.recommendation_id ?? i} rec={r} /> : (
               <div key={r.recommendation_id ?? i} className="advice">
                 <p>{plainRule(r.rule_id)}</p>
-                <p className="small muted">
-                  {r.status === "applied" ? "✓ AgentLimit applied this fix itself and checked it worked."
-                    : r.status === "pending_operator" ? "Needs a human decision." : r.status === "failed" ? "The fix could not be applied (recorded)." : ""}
-                </p>
+                <AdviceSteps rec={r} entries={entries} />
               </div>
             ))}
         </div>
@@ -241,7 +253,7 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
       <div id="tour-proof" className="card">
         <h3>🧾 The proof <span className="muted small">re-checked from the signed record</span></h3>
         {!closed && <p className="muted">The full proof appears when the run ends.</p>}
-        <EvidenceReport key={String(closed)} sessionId={sessionId} autoLoad={closed} technical={technical} />
+        <EvidenceReport key={String(closed)} sessionId={sessionId} access={access} autoLoad={closed} technical={technical} />
       </div>
 
       {technical && (
@@ -252,5 +264,23 @@ export default function SessionDashboard({ sessionId, onBack, operator, backLabe
 
       <Tour open={tour} onClose={() => setTour(false)} />
     </div>
+  );
+}
+
+
+/** Suggested → Applied → Verified, read from the signed recommendation_applied event. */
+function AdviceSteps({ rec, entries }: { rec: any; entries: LedgerEntry[] }) {
+  const ev = [...entries].reverse().find((e) => e.event_type === "recommendation_applied"
+    && (e.payload.recommendation_id === rec.recommendation_id || (!rec.recommendation_id && e.payload.rule_id === rec.rule_id)));
+  const applied = ev?.payload.applied === true;
+  const verified = ev?.payload.verified === true;
+  if (rec.status === "pending_operator" || rec.action === "notify_operator")
+    return <p className="small muted">Suggested · needs a human decision (AgentLimit does not act on its own here).</p>;
+  return (
+    <p className="small steps-line">
+      <span className="ok">✓ Suggested</span>
+      <span className={applied ? "ok" : ev ? "fail" : "muted"}>{applied ? "✓ Applied" : ev ? "✗ Not applied" : "… Applying"}</span>
+      <span className={verified ? "ok" : applied ? "warn" : "muted"}>{verified ? "✓ Verified" : applied ? "≈ Not independently verified" : ""}</span>
+    </p>
   );
 }

@@ -6,7 +6,7 @@ export default function StatusBanner({ info, state }: { info: StateInfo; state: 
   const cur = LADDER.indexOf(state);
   return (
     <div id="tour-status" className={`banner sig-${info.signal}`}>
-      <div className="banner-main">
+      <div className="banner-main" role="status" aria-live="polite">
         <span className="banner-icon" aria-hidden>{info.icon}</span>
         <div>
           <div className="banner-label">
@@ -19,9 +19,9 @@ export default function StatusBanner({ info, state }: { info: StateInfo; state: 
         {LADDER.map((s, i) => {
           const st = STATES[s];
           return (
-            <div key={s} className={`light sig-${st.signal} ${i === cur ? "on" : i < cur ? "past" : ""}`} title={st.say}>
+            <div key={s} className={`light sig-${i === cur && s === "KILL" ? info.signal : st.signal} ${i === cur ? "on" : i < cur ? "past" : ""}`} title={st.say}>
               <span className="light-dot" />
-              <span className="light-name">{st.label}</span>
+              <span className="light-name">{i === cur && s === "KILL" ? info.label : st.label}</span>
               <span className="light-tech">{st.tech}</span>
             </div>
           );

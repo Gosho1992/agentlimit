@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authStatus, setViewMode } from "./api/client";
+import { authStatus } from "./api/client";
 import Developers from "./components/Developers";
 import Guide from "./components/Guide";
 import Landing from "./components/Landing";
@@ -14,11 +14,12 @@ import SessionDashboard from "./components/SessionDashboard";
 type Route = { page: string; run?: string | null; session?: string | null };
 
 const GUEST_KEY = (id: string) => `agentlimit-guest-${id}`;
+// The guest pass for a run this visitor started; kept in this browser so other tabs can open the run too.
 function guestToken(id: string): string | null {
-  try { return sessionStorage.getItem(GUEST_KEY(id)); } catch { return null; }
+  try { return localStorage.getItem(GUEST_KEY(id)) ?? sessionStorage.getItem(GUEST_KEY(id)); } catch { return null; }
 }
 function rememberGuest(id: string, token: string) {
-  try { sessionStorage.setItem(GUEST_KEY(id), token); } catch { /* storage unavailable: token stays in memory */ }
+  try { localStorage.setItem(GUEST_KEY(id), token); } catch { /* storage unavailable: token stays in memory */ }
 }
 
 function parse(): Route {
@@ -62,9 +63,8 @@ export default function App() {
     nav({ page: "run", run: id });
   };
 
-  // the API client follows the page: public endpoints for /run, operator endpoints for the console
-  if (route.page === "run" && route.run) setViewMode({ public: true, guestToken: memToken[route.run] ?? guestToken(route.run) });
-  else setViewMode({ public: false });
+  // public endpoints for /run (with this visitor's guest pass, if they started it); operator API for the console
+  const runAccess = route.run ? { public: true, guestToken: memToken[route.run] ?? guestToken(route.run) } : null;
 
   const link = (page: string, label: string) => (
     <a href={`?page=${page}`} className={route.page === page ? "active" : ""}
@@ -90,12 +90,12 @@ export default function App() {
       {route.page === "guide" && <Guide go={go} />}
       {route.page === "developers" && <Developers go={go} />}
       {route.page === "run" && route.run && (
-        <SessionDashboard key={route.run} sessionId={route.run} operator={false} onBack={() => go("home#replays")} backLabel="← All runs" />
+        <SessionDashboard key={route.run} sessionId={route.run} access={runAccess!} onBack={() => go("home#replays")} backLabel="← All runs" />
       )}
       {route.page === "console" && (!auth ? null : !auth.authenticated ? (
         <Login onDone={refresh} configured={auth.configured} />
       ) : route.session ? (
-        <SessionDashboard key={route.session} sessionId={route.session} operator onBack={() => nav({ page: "console" })} backLabel="← Console" />
+        <SessionDashboard key={route.session} sessionId={route.session} onBack={() => nav({ page: "console" })} backLabel="← Console" />
       ) : (
         <NewSessionForm onCreated={(id) => nav({ page: "console", session: id })} />
       ))}

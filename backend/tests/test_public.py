@@ -124,3 +124,32 @@ async def test_guest_mode_switch(app_env, monkeypatch):
     app, _ = app_env
     async with client(app) as anon:
         assert (await anon.post("/public/try", json={"scenario": "reconcile"})).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_replay_highlights_come_from_signed_evidence(app_env):
+    app, _ = app_env
+    async with client(app, headers=AUTH) as op, client(app) as anon:
+        sid = (await op.post("/sessions", json={"task": "reconcile"})).json()["session_id"]
+        await wait_closed(op, sid)
+        await op.post(f"/sessions/{sid}/feature")
+        r = next(x for x in (await anon.get("/public/replays")).json() if x["session_id"] == sid)
+        texts = [h["text"] for h in r["highlights"]]
+        assert r["artifact_verdict"] == "VERIFIED"
+        assert texts[0].startswith("Answer independently re-calculated")
+        assert "Signed record valid and complete" in texts
+        assert not any("stop" in t.lower() for t in texts)          # nothing claimed that didn't happen
+
+
+@pytest.mark.asyncio
+async def test_replay_highlights_never_claim_correctness_for_integrity_only(app_env):
+    app, holder = app_env
+    from backend.tests.fakes import FakeRuntime
+    holder["runtime"] = FakeRuntime([{"stdout": "42\n", "stderr": "", "exit_code": 0}])
+    async with client(app, headers=AUTH) as op, client(app) as anon:
+        sid = (await op.post("/sessions", json={"task": "print the answer to everything"})).json()["session_id"]
+        await wait_closed(op, sid)
+        await op.post(f"/sessions/{sid}/feature")
+        r = next(x for x in (await anon.get("/public/replays")).json() if x["session_id"] == sid)
+        assert r["artifact_verdict"] != "VERIFIED"
+        assert not any("re-calculated: correct" in h["text"] for h in r["highlights"])

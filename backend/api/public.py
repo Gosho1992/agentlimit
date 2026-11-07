@@ -32,6 +32,7 @@ from backend.api import evidence as ev_api
 from backend.api import governance as gov_api
 from backend.api import sessions as sess_api
 from backend.config import settings
+from backend.orchestrator.inference_pricing import has_price
 from backend.evidence.archive import read_entries, summarize
 from backend.services.session_manager import LimitExceeded, SessionStartError, session_manager
 
@@ -117,10 +118,54 @@ async def list_replays():
         closed = next((e["payload"] for e in reversed(entries) if e["event_type"] == "session_closed"), None)
         kill = next((e["payload"] for e in reversed(entries)
                      if e["event_type"] in ("kill_verified", "kill_failed")), None)
+        try:
+            report = ev_api._report(sid)
+        except Exception:
+            report = None
         out.append({"session_id": sid, "task": sm["task"][:160], "final_state": sm["final_state"],
                     "agent_status": sm["agent_status"], "created_at": sm["created_at"],
                     "kill_verdict": (kill or {}).get("verdict"), "closed": bool(closed),
+                    "artifact_verdict": ((report or {}).get("artifact_verification") or {}).get("verdict"),
+                    "highlights": outcomes(entries, report),
                     "scenario": next((s["id"] for s in scenarios.SCENARIOS if s["task"] == sm["task"]), None)})
+    return out
+
+
+def outcomes(entries: list[dict], report: dict | None) -> list[dict]:
+    """What a run actually demonstrated, derived ONLY from its signed record and the
+    re-derived verification report, never from the scenario label."""
+    out: list[dict] = []
+    last = lambda t: next((e["payload"] for e in reversed(entries) if e["event_type"] == t), None)
+    kill = next((e["payload"] for e in reversed(entries) if e["event_type"] in ("kill_verified", "kill_failed")), None)
+    if kill:
+        if kill.get("verdict") == "KILL_CONFIRMED" and (report or {}).get("verification", {}).get("termination") == "VALID":
+            out.append({"signal": "red", "text": f"External stop confirmed ({sum(bool(v) for v in kill.get('checks', {}).values())}/{len(kill.get('checks', {}))} checks)"})
+        else:
+            out.append({"signal": "yellow", "text": "Stop NOT confirmed"})
+    stopped = last("agent_stopped")
+    if stopped and stopped.get("stopped_by") == "governor" and "retry" in str(stopped.get("reason", "")):
+        out.append({"signal": "yellow", "text": "Repeated failing attempts stopped by AgentLimit"})
+    for e in entries:
+        p = e["payload"]
+        if e["event_type"] == "recommendation_applied" and p.get("action") == "set_memory_high":
+            out.append({"signal": "yellow", "text": "Memory squeeze applied and verified by readback" if p.get("verified")
+                        else "Memory squeeze applied, NOT verified"})
+            break
+    thr = last("throttle_applied")
+    if thr:
+        down = isinstance(thr.get("model_downgrade"), dict)
+        out.append({"signal": "orange", "text": ("Slowed down (verified)" if thr.get("verified") else "Slow-down NOT verified")
+                    + (" + switched to a cheaper model" if down else "")})
+    av = ((report or {}).get("artifact_verification") or {}).get("verdict")
+    if av == "VERIFIED":
+        out.insert(0, {"signal": "green", "text": "Answer independently re-calculated: correct"})
+    elif av == "INTEGRITY_ONLY":
+        out.insert(0, {"signal": "grey", "text": "Output sealed (answer not re-calculated for this task)"})
+    elif av == "FAILED":
+        out.insert(0, {"signal": "red", "text": "Answer did NOT match the independent calculation"})
+    if report and report.get("verification", {}).get("ledger_integrity") == "VALID" \
+            and report["verification"].get("ledger_completeness") == "COMPLETE":
+        out.append({"signal": "green", "text": "Signed record valid and complete"})
     return out
 
 
@@ -150,7 +195,8 @@ async def try_it(req: TryRequest, request: Request):
                                      "Watch a replay meanwhile and try again shortly")
         budget = sess_api.build_budget(sess_api.CreateSessionRequest(
             task=s["task"], cpu_budget_seconds=s["cpu"], memory_budget_mb=s["mem"],
-            token_budget=s["tokens"], wall_clock_seconds=s["wall"], cost_limit_usd=0))
+            token_budget=s["tokens"], wall_clock_seconds=s["wall"],
+            cost_limit_usd=s["cost"] if has_price(settings.vultr_model_default) else 0))
         try:
             rt = await session_manager.create(s["task"], budget)
         except LimitExceeded as e:

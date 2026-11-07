@@ -268,3 +268,21 @@ async def test_non_normalised_paths_cannot_ride_public_prefixes(app):
         assert (await c.get("/auth/anything-new")).status_code == 401
         assert (await c.get("/docs")).status_code in (401, 404)
         assert (await c.get("/openapi.json")).status_code in (401, 404)
+
+
+@pytest.mark.asyncio
+async def test_failed_kill_can_be_retried_and_confirmed_kill_is_final(tmp_path):
+    eng, orch, cg, ledger, *_ = make(tmp_path)
+    agent = asyncio.create_task(asyncio.sleep(30))
+    orch.attach_task(agent)
+    cg.kill_works = False                                   # kernel kill fails the first time
+    r1 = await eng.kill_now("operator_kill")
+    assert r1["verdict"] == "KILL_FAILED" and eng.state == State.KILL
+    cg.kill_works = True
+    r2 = await eng.retry_kill()
+    assert r2["verdict"] == "KILL_CONFIRMED"
+    types = [e["event_type"] for e in ledger.read_all()]
+    assert "kill_retry" in types and types.count("kill_verified") == 1
+    r3 = await eng.retry_kill()                             # confirmed is final: no new attempt
+    assert r3["verdict"] == "KILL_CONFIRMED"
+    assert [e["event_type"] for e in ledger.read_all()].count("kill_retry") == 1

@@ -8,24 +8,34 @@ const TITLES: Record<string, string> = {
   retry: "Agent stuck in a loop", memory: "Agent eating memory",
 };
 
+// Badge = how the run ended. Claims about correctness come only from r.highlights (server-derived from signed evidence).
 function outcome(r: any): { cls: string; text: string } {
-  if (r.kill_verdict === "KILL_CONFIRMED") return { cls: "sig-red", text: "🛑 Stopped for good, proven" };
-  if (r.agent_status === "completed") return { cls: "sig-green", text: "🎉 Finished, answer checked" };
+  if (r.kill_verdict === "KILL_CONFIRMED") return { cls: "sig-red", text: "🛑 Stopped for good" };
+  if (r.kill_verdict === "KILL_FAILED") return { cls: "sig-yellow", text: "⚠️ Stop not confirmed" };
+  if (r.agent_status === "completed") return { cls: "sig-green", text: "🏁 Finished" };
   if (String(r.agent_status).startsWith("stopped")) return { cls: "sig-yellow", text: "✋ Stopped early" };
   return { cls: "sig-grey", text: r.final_state };
 }
 
+type Load<T> = { state: "loading" } | { state: "error"; error: string } | { state: "ok"; data: T };
+
 export default function Landing({ go, openRun }: { go: (page: string) => void; openRun: (id: string, token?: string) => void }) {
-  const [scenarios, setScenarios] = useState<PublicScenario[]>([]);
-  const [guest, setGuest] = useState(true);
-  const [replays, setReplays] = useState<any[]>([]);
+  const [sc, setSc] = useState<Load<{ scenarios: PublicScenario[]; guest_mode: boolean }>>({ state: "loading" });
+  const [rp, setRp] = useState<Load<any[]>>({ state: "loading" });
+  const scenarios = sc.state === "ok" ? sc.data.scenarios : [];
+  const guest = sc.state === "ok" ? sc.data.guest_mode : false;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    getScenarios().then((r) => { setScenarios(r.scenarios); setGuest(r.guest_mode); }).catch(() => {});
-    getReplays().then(setReplays).catch(() => {});
-  }, []);
+  const loadScenarios = () => {
+    setSc({ state: "loading" });
+    getScenarios().then((d) => setSc({ state: "ok", data: d })).catch((e) => setSc({ state: "error", error: e.message }));
+  };
+  const loadReplays = () => {
+    setRp({ state: "loading" });
+    getReplays().then((d) => setRp({ state: "ok", data: d })).catch((e) => setRp({ state: "error", error: e.message }));
+  };
+  useEffect(() => { loadScenarios(); loadReplays(); }, []);
 
   async function start(id: string) {
     setBusy(id);
@@ -108,7 +118,11 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
           Pick a situation. A real AI agent (running on Vultr Serverless Inference) gets the task, writes its own code and
           runs it in a fresh sandbox on a Vultr server, while AgentLimit governs it live. A run takes 1 to 4 minutes.
         </p>
-        {!guest && <p className="warn">Live runs are switched off right now; you can still watch the recorded runs below.</p>}
+        {sc.state === "loading" && <p className="muted">Loading the scenarios…</p>}
+        {sc.state === "error" && (
+          <p className="error" role="alert">Couldn't reach the server ({sc.error}). <button className="btn-ghost" onClick={loadScenarios}>Retry</button></p>
+        )}
+        {sc.state === "ok" && !guest && <p className="warn">Live runs are switched off right now; you can still watch the recorded runs below.</p>}
         <div className="try-grid">
           {scenarios.map((s) => (
             <div key={s.id} className={`try-card edge-${s.expect_color}`}>
@@ -126,16 +140,28 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
 
       <section id="replays" className="replays">
         <h2>🎬 Watch a recorded real run</h2>
-        <p className="muted">These ran on the Vultr server and are replayed from their signed record. You can re-check the proof and run the tamper test yourself.</p>
-        {replays.length === 0 && <p className="muted">No recorded runs published yet.</p>}
+        <p className="muted">These ran on the Vultr server and are replayed from their signed record. Each card lists only what that record proves. You can re-check the proof and run the tamper test yourself.</p>
+        {rp.state === "loading" && <p className="muted">Loading recorded runs…</p>}
+        {rp.state === "error" && (
+          <p className="error" role="alert">Couldn't load the recorded runs ({rp.error}). This is a connection problem, not missing evidence.{" "}
+            <button className="btn-ghost" onClick={loadReplays}>Retry</button></p>
+        )}
+        {rp.state === "ok" && rp.data.length === 0 && <p className="muted">No recorded runs published yet.</p>}
         <div className="replay-list">
-          {replays.map((r) => {
+          {(rp.state === "ok" ? rp.data : []).map((r) => {
             const o = outcome(r);
-            const sc = r.scenario ?? scenarioOf(r.task);
+            const scid = r.scenario ?? scenarioOf(r.task);
             return (
               <button key={r.session_id} className="replay" onClick={() => openRun(r.session_id)}>
                 <span className={`replay-badge ${o.cls}`}>{o.text}</span>
-                <strong>{(sc && TITLES[sc]) || "Custom task"}</strong>
+                <strong>{(scid && TITLES[scid]) || "Custom task"}</strong>
+                {(r.highlights ?? []).length > 0 && (
+                  <ul className="highlights">
+                    {r.highlights.map((h: any, i: number) => (
+                      <li key={i}><span className={`story-dot sig-${h.signal}`} />{h.text}</li>
+                    ))}
+                  </ul>
+                )}
                 <span className="muted small">{new Date(r.created_at).toLocaleString()} · watch & verify →</span>
               </button>
             );
@@ -145,18 +171,18 @@ export default function Landing({ go, openRun }: { go: (page: string) => void; o
 
       <section className="compare">
         <h2>Without vs. with AgentLimit</h2>
-        <table className="compare-table">
+        <div className="table-scroll"><table className="compare-table">
           <thead><tr><th></th><th>A normal agent setup</th><th>With AgentLimit</th></tr></thead>
           <tbody>
             <tr><td>Who decides when to stop?</td><td>The agent itself</td><td>✓ An outside referee that can force a stop</td></tr>
             <tr><td>Who measures usage?</td><td>The agent reports it</td><td>✓ Measured from outside, can't be faked</td></tr>
             <tr><td>When things go wrong</td><td>Keeps going, or is killed blindly</td><td>✓ Warn → slow down → freeze → stop, step by step</td></tr>
-            <tr><td>AI spending</td><td>Seen on next month's bill</td><td>✓ Capped live, switches to a cheaper model</td></tr>
+            <tr><td>AI spending</td><td>Seen on next month's bill</td><td>✓ Token budget and dollar cap enforced before each AI call; can switch to a cheaper model</td></tr>
             <tr><td>"Did it really stop?"</td><td>Hope so</td><td>✓ 6 separate checks, recorded</td></tr>
             <tr><td>"Is the answer right?"</td><td>Trust the agent</td><td>✓ Re-calculated independently</td></tr>
             <tr><td>Proof afterwards</td><td>Logs anyone can edit</td><td>✓ Signed record; edits are caught</td></tr>
           </tbody>
-        </table>
+        </table></div>
       </section>
 
       <section className="vultr">
