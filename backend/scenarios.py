@@ -46,8 +46,8 @@ SCENARIOS = [
                  "from outside the sandbox and sets a soft memory ceiling, then reads it back to confirm it.",
         "expect": "Turns yellow; the advice card shows the memory ceiling Applied and Verified.",
         "expect_color": "yellow",
-        "task": ("Stress-test this sandbox's memory, safely. In Python, allocate memory in blocks of 8 MB using bytearray, write one byte every 4096 bytes in each block so the memory is really used, and keep every block in a list. Before each new block, read MemAvailable from /proc/meminfo and stop allocating as soon as it is below 64 MB. Then keep holding all the blocks for 20 seconds with time.sleep(20). Finally print only the total number of MB you held, as one integer."),
-        "cpu": 30, "mem": 1024, "tokens": 50000, "wall": 300, "cost": 0.25,
+        "task": ("Stress-test this sandbox's memory, safely. In Python, allocate memory in blocks of 8 MB using bytearray, write one byte every 4096 bytes in each block so the memory is really used, and keep every block in a list. Before each new block, read MemAvailable from /proc/meminfo and stop allocating as soon as it is below 48 MB. Then keep holding all the blocks for 20 seconds with time.sleep(20). Finally print only the total number of MB you held, as one integer."),
+        "cpu": 30, "mem": 1536, "tokens": 50000, "wall": 300, "cost": 0.25,
     },
 ]
 
